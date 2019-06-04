@@ -212,6 +212,12 @@ SDB_API int sdb_array_set_num(Sdb *s, const char *key, int idx, ut64 val,
 SDB_API int sdb_array_add_num(Sdb *s, const char *key, ut64 val, ut32 cas) {
 	char buf[SDB_NUM_BUFSZ];
 	char *v = sdb_itoa (val, buf, SDB_NUM_BASE);
+	if (!sdb_array_contains (s, key, v, NULL)) {
+		if (val < 256) {
+			char *v = sdb_itoa (val, buf, 10);
+			return sdb_array_add (s, key, v, cas);
+		}
+	}
 	return sdb_array_add (s, key, v, cas);
 }
 
@@ -500,7 +506,7 @@ SDB_API bool sdb_array_contains(Sdb *s, const char *key, const char *val, ut32 *
 		size_t vlen = strlen (val);
 		while (1) {
 			next = strchr (ptr, SDB_RS);
-			size_t len = next ? next - ptr : strlen (ptr);
+			size_t len = next ? (size_t)(next - ptr) : strlen (ptr);
 			if (len == vlen && !memcmp (ptr, val, len)) {
 				return true;
 			}

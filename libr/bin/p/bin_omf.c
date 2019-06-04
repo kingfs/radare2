@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2015-2017 - ampotos, pancake */
+/* radare - LGPL - Copyright 2015-2019 - ampotos, pancake */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -6,37 +6,29 @@
 #include <r_bin.h>
 #include "omf/omf.h"
 
-static void *load_bytes(RBinFile *bf, const ut8 *buf, ut64 size, ut64 loadaddrn, Sdb *sdb) {
-	if (!buf || !size || size == UT64_MAX) {
-		return NULL;
-	}
-	return r_bin_internal_omf_load (buf, size);
+static bool load_buffer (RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
+	ut64 size;
+	const ut8 *buf = r_buf_data (b, &size);
+	*bin_obj = r_bin_internal_omf_load (buf, size);
+	return *bin_obj != NULL;
 }
 
-static bool load(RBinFile *bf) {
-	const ut8 *byte = bf? r_buf_buffer (bf->buf): NULL;
-	ut64 size = bf? r_buf_size (bf->buf): 0;
-	if (!bf || !bf->o) {
-		return false;
-	}
-	bf->o->bin_obj = load_bytes (bf, byte, size, bf->o->loadaddr, bf->sdb);
-	return bf->o->bin_obj != NULL;
-}
-
-static int destroy(RBinFile *bf) {
+static void destroy(RBinFile *bf) {
 	r_bin_free_all_omf_obj (bf->o->bin_obj);
 	bf->o->bin_obj = NULL;
-	return true;
 }
 
-static bool check_bytes(const ut8 *buf, ut64 length) {
+static bool check_buffer(RBuffer *b) {
 	int i;
-	if (!buf || length < 4) {
+	ut8 ch;
+	if (r_buf_read_at (b, 0, &ch, 1) != 1) {
 		return false;
 	}
-	if ((*buf != 0x80 && *buf != 0x82) || length < 4) {
+	if (ch != 0x80 && ch != 0x82) {
 		return false;
 	}
+	ut64 length = 0;
+	const ut8 *buf = r_buf_data (b, &length);
 	ut16 rec_size = ut8p_bw (buf + 1);
 	ut8 str_size = *(buf + 3);
 	if (str_size + 2 != rec_size || length < rec_size + 3) {
@@ -77,6 +69,10 @@ static RList *entries(RBinFile *bf) {
 static RList *sections(RBinFile *bf) {
 	RList *ret;
 	ut32 ct_omf_sect = 0;
+
+	if (!bf || !bf->o || !bf->o->bin_obj) {
+		return NULL;
+	}
 	r_bin_omf_obj *obj = bf->o->bin_obj;
 
 	if (!(ret = r_list_new ())) {
@@ -97,7 +93,9 @@ static RList *symbols(RBinFile *bf) {
 	RBinSymbol *sym;
 	OMF_symbol *sym_omf;
 	int ct_sym = 0;
-
+	if (!bf || !bf->o || !bf->o->bin_obj) {
+		return NULL;
+	}
 	if (!(ret = r_list_new ())) {
 		return NULL;
 	}
@@ -151,10 +149,9 @@ RBinPlugin r_bin_plugin_omf = {
 	.name = "omf",
 	.desc = "omf bin plugin",
 	.license = "LGPL3",
-	.load = &load,
-	.load_bytes = &load_bytes,
+	.load_buffer = &load_buffer,
 	.destroy = &destroy,
-	.check_bytes = &check_bytes,
+	.check_buffer = &check_buffer,
 	.baddr = &baddr,
 	.entries = &entries,
 	.sections = &sections,

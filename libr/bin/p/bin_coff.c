@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2014-2017 - Fedor Sakharov */
+/* radare - LGPL - Copyright 2014-2019 - Fedor Sakharov */
 
 #include <r_types.h>
 #include <r_util.h>
@@ -19,31 +19,18 @@ static Sdb* get_sdb(RBinFile *bf) {
 	return NULL;
 }
 
-static void * load_bytes(RBinFile *bf, const ut8 *buf, ut64 sz, ut64 loadaddr, Sdb *sdb) {
-	if (!buf || !sz || sz == UT64_MAX) {
-		return NULL;
-	}
-	RBuffer *tbuf = r_buf_new();
-	r_buf_set_bytes (tbuf, buf, sz);
-	void *res = r_bin_coff_new_buf (tbuf, bf->rbin->verbose);
-	r_buf_free (tbuf);
-	return res;
+static bool r_coff_is_stripped(struct r_bin_coff_obj *obj) {
+	return !!(obj->hdr.f_flags & (COFF_FLAGS_TI_F_RELFLG | \
+		COFF_FLAGS_TI_F_LNNO | COFF_FLAGS_TI_F_LSYMS));
 }
 
-static bool load(RBinFile *bf) {
-	const ut8 *bytes = bf ? r_buf_buffer (bf->buf) : NULL;
-	ut64 sz = bf ? r_buf_size (bf->buf): 0;
-
-	if (!bf || !bf->o) {
-		return false;
-	}
-	bf->o->bin_obj = load_bytes (bf, bytes, sz, bf->o->loadaddr, bf->sdb);
-	return bf->o->bin_obj ? true: false;
+static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *buf, ut64 loadaddr, Sdb *sdb) {
+	*bin_obj = r_bin_coff_new_buf (buf, bf->rbin->verbose);
+	return *bin_obj != NULL;
 }
 
-static int destroy(RBinFile *bf) {
-	r_bin_coff_free((struct r_bin_coff_obj*)bf->o->bin_obj);
-	return true;
+static void destroy(RBinFile *bf) {
+	r_bin_coff_free ((struct r_bin_coff_obj*)bf->o->bin_obj);
 }
 
 static ut64 baddr(RBinFile *bf) {
@@ -56,7 +43,6 @@ static RBinAddr *binsym(RBinFile *bf, int sym) {
 
 static bool _fill_bin_symbol(struct r_bin_coff_obj *bin, int idx, RBinSymbol **sym) {
 	RBinSymbol *ptr = *sym;
-	char * coffname = NULL;
 	struct coff_symbol *s = NULL;
 	if (idx < 0 || idx > bin->hdr.f_nsyms) {
 		return false;
@@ -65,7 +51,7 @@ static bool _fill_bin_symbol(struct r_bin_coff_obj *bin, int idx, RBinSymbol **s
 		return false;
 	}
 	s = &bin->symbols[idx];
-	coffname = r_coff_symbol_name (bin, s);
+	char *coffname = r_coff_symbol_name (bin, s);
 	if (!coffname) {
 		return false;
 	}
@@ -83,7 +69,7 @@ static bool _fill_bin_symbol(struct r_bin_coff_obj *bin, int idx, RBinSymbol **s
 	case COFF_SYM_CLASS_SECTION:
 		ptr->type = r_str_const (R_BIN_TYPE_SECTION_STR);
 		break;
-	case COFF_SYM_CLASS_EXTERNAL:
+	case COFF_SYM_CLASS_EXTERNAL: // should be prefixed with sym.imp
 		ptr->type = r_str_const ("EXTERNAL");
 		break;
 	case COFF_SYM_CLASS_STATIC:
@@ -103,32 +89,53 @@ static bool _fill_bin_symbol(struct r_bin_coff_obj *bin, int idx, RBinSymbol **s
 	return true;
 }
 
+static RBinImport *_fill_bin_import(struct r_bin_coff_obj *bin, int idx) {
+	RBinImport *ptr = R_NEW0 (RBinImport);
+	if (!ptr || idx < 0 || idx > bin->hdr.f_nsyms) {
+		R_FREE (ptr);
+		return NULL;
+	}
+	struct coff_symbol *s = &bin->symbols[idx];
+	if (s->n_sclass != COFF_SYM_CLASS_EXTERNAL) {
+		R_FREE (ptr);
+		return NULL;
+	}
+	char *coffname = r_coff_symbol_name (bin, s);
+	if (!coffname) {
+		R_FREE (ptr);
+		return NULL;
+	}
+	ptr->name = strdup (coffname);
+	ptr->bind = r_str_const ("NONE");
+	ptr->type = r_str_const ("FUNC");
+	return ptr;
+}
+
 static RList *entries(RBinFile *bf) {
 	struct r_bin_coff_obj *obj = (struct r_bin_coff_obj*)bf->o->bin_obj;
 	RList *ret;
-	RBinAddr *ptr = NULL;
 	if (!(ret = r_list_newf (free))) {
 		return NULL;
 	}
-	ptr = r_coff_get_entry (obj);
-	r_list_append (ret, ptr);
+	RBinAddr *ptr = r_coff_get_entry (obj);
+	if (ptr) {
+		r_list_append (ret, ptr);
+	}
 	return ret;
 }
 
 static RList *sections(RBinFile *bf) {
-	char *tmp, *coffname = NULL;
+	char *tmp = NULL;
 	size_t i;
-	RList *ret = NULL;
 	RBinSection *ptr = NULL;
 	struct r_bin_coff_obj *obj = (struct r_bin_coff_obj*)bf->o->bin_obj;
 
-	ret = r_list_newf (free);
+	RList *ret = r_list_newf (free);
 	if (!ret) {
 		return NULL;
 	}
 	if (obj && obj->scn_hdrs) {
 		for (i = 0; i < obj->hdr.f_nscns; i++) {
-			free (coffname);
 			tmp = r_coff_symbol_name (obj, &obj->scn_hdrs[i]);
 			if (!tmp) {
 				r_list_free (ret);
@@ -136,14 +143,13 @@ static RList *sections(RBinFile *bf) {
 			}
 			//IO does not like sections with the same name append idx
 			//since it will update it
-			coffname = r_str_newf ("%s-%d", tmp, i);
-			free (tmp);
 			ptr = R_NEW0 (RBinSection);
 			if (!ptr) {
-				free (coffname);
+				free (tmp);
 				return ret;
 			}
-			strncpy (ptr->name, coffname, R_BIN_SIZEOF_STRINGS);
+			ptr->name = r_str_newf ("%s-%d", tmp, i);
+			free (tmp);
 			if (strstr (ptr->name, "data")) {
 				ptr->is_data = true;
 			}
@@ -164,7 +170,6 @@ static RList *sections(RBinFile *bf) {
 			r_list_append (ret, ptr);
 		}
 	}
-	free (coffname);
 	return ret;
 }
 
@@ -172,6 +177,7 @@ static RList *symbols(RBinFile *bf) {
 	int i;
 	RList *ret = NULL;
 	RBinSymbol *ptr = NULL;
+	struct coff_symbol *s;
 	struct r_bin_coff_obj *obj = (struct r_bin_coff_obj*)bf->o->bin_obj;
 	if (!(ret = r_list_new ())) {
 		return ret;
@@ -179,6 +185,10 @@ static RList *symbols(RBinFile *bf) {
 	ret->free = free;
 	if (obj->symbols) {
 		for (i = 0; i < obj->hdr.f_nsyms; i++) {
+			s = &obj->symbols[i];
+			if (s->n_sclass == COFF_SYM_CLASS_EXTERNAL) {
+				continue;
+			}
 			if (!(ptr = R_NEW0 (RBinSymbol))) {
 				break;
 			}
@@ -194,7 +204,25 @@ static RList *symbols(RBinFile *bf) {
 }
 
 static RList *imports(RBinFile *bf) {
-	return NULL;
+	int i;
+	RList *ret = NULL;
+	struct r_bin_coff_obj *obj = (struct r_bin_coff_obj*)bf->o->bin_obj;
+	if (!(ret = r_list_new ())) {
+		return ret;
+	}
+	ret->free = free;
+	if (obj->symbols) {
+		int ord = 0;
+		for (i = 0; i < obj->hdr.f_nsyms; i++) {
+			RBinImport *ptr = _fill_bin_import (obj, i);
+			if (ptr) {
+				ptr->ordinal = ord++;
+				r_list_append (ret, ptr);
+			}
+			i += obj->symbols[i].n_numaux;
+		}
+	}
+	return ret;
 }
 
 static RList *libs(RBinFile *bf) {
@@ -338,7 +366,7 @@ static ut64 size(RBinFile *bf) {
 	return 0;
 }
 
-static bool check_bytes(const ut8 *buf, ut64 length) {
+static bool check_buffer(RBuffer *buf) {
 #if 0
 TODO: do more checks here to avoid false positives
 
@@ -350,10 +378,10 @@ ut32 NUMOFSYMS
 ut16 OPTHDRSIZE
 ut16 CHARACTERISTICS
 #endif
-	if (buf && length >= 20) {
-		return r_coff_supported_arch (buf);
-	}
-	return false;
+
+	ut8 tmp[20];
+	int r = r_buf_read_at (buf, 0, tmp, sizeof (tmp));
+	return r >= 20 && r_coff_supported_arch (tmp);
 }
 
 RBinPlugin r_bin_plugin_coff = {
@@ -361,10 +389,9 @@ RBinPlugin r_bin_plugin_coff = {
 	.desc = "COFF format r_bin plugin",
 	.license = "LGPL3",
 	.get_sdb = &get_sdb,
-	.load = &load,
-	.load_bytes = &load_bytes,
+	.load_buffer = &load_buffer,
 	.destroy = &destroy,
-	.check_bytes = &check_bytes,
+	.check_buffer = &check_buffer,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,

@@ -5,6 +5,9 @@
 extern "C" {
 #endif
 
+typedef void (*RPanelDirectionCallback)(void *user, int direction);
+typedef void (*RPanelRotateCallback)(void *user, bool rev);
+
 typedef enum {
 	PANEL_TYPE_DEFAULT = 0,
 	PANEL_TYPE_MENU = 1
@@ -17,20 +20,42 @@ typedef struct r_panel_pos_t {
 	int h;
 } RPanelPos;
 
-typedef struct r_panel_t {
-	RPanelPos pos;
-	RPanelPos prevPos;
-	int depth;
-	int sx; // scroll-x
-	int sy; // scroll-y
-	int curpos;
+typedef enum {
+	PANEL_EDGE_NONE,
+	PANEL_EDGE_RIGHT,
+	PANEL_EDGE_BOTTOM
+} RPanelEdge;
+
+typedef struct r_panel_model_t {
+	RPanelDirectionCallback directionCb;
+	RPanelRotateCallback rotateCb;
+	RPanelType type;
 	char *cmd;
 	char *title;
-	bool refresh;
-	RPanelType type;
 	ut64 baseAddr;
 	ut64 addr;
+	bool cache;
 	char *cmdStrCache;
+	char *readOnly;
+	char *funcName;
+	char **filter;
+	int n_filter;
+	int rotate;
+} RPanelModel;
+
+typedef struct r_panel_view_t {
+	RPanelPos pos;
+	RPanelPos prevPos;
+	int sx;
+	int sy;
+	int curpos;
+	bool refresh;
+	int edgeflag;
+} RPanelView;
+
+typedef struct r_panel_t {
+    RPanelModel *model;
+    RPanelView *view;
 } RPanel;
 
 #ifdef __cplusplus

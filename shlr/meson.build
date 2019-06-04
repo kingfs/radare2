@@ -16,8 +16,14 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     endif
 
     # NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/Makefile
-    CS_TIP = 'e2c1cd46c06744beaceff42dd882de3a90f0a37c'
-    CS_BRA = 'master'
+    use_capstone5 = get_option('use_capstone5')
+    if use_capstone5
+      CS_TIP = '0574f899e5be711895378ea0848f38808f4a5431'
+      CS_BRA = 'next'
+    else
+      CS_TIP = '120847ea9ec67003ef18a07ab47e8fa0e88d5773'
+      CS_BRA = 'v4'
+    endif
 
     capstone_git_user = 'aquynh'
 
@@ -47,7 +53,7 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
       patch_cmd_str = '-C @0@ apply -p1 @1@'.format(capstone_path, patch_path)
       patch_cmd = run_command(git_exe, patch_cmd_str.split())
       if patch_cmd.returncode() != 0
-        error('Cannot apply patch ' + file)
+        warning('Cannot apply patch ' + file)
       endif
     endforeach
   endif
@@ -108,6 +114,9 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
   foreach rel_cs_file : rel_cs_files
     cs_files += [join_paths(capstone_path, rel_cs_file)]
   endforeach
+  if get_option('use_capstone5')
+    cs_files += [join_paths(capstone_path, 'arch/X86/X86InstPrinterCommon.c')]
+  endif
 
   capstone_includes = [platform_inc, include_directories('capstone/include')]
 
@@ -153,7 +162,9 @@ sdb_files = [
   'sdb/src/dict.c',
   'sdb/src/disk.c',
   'sdb/src/fmt.c',
-  'sdb/src/ht.c',
+  'sdb/src/ht_uu.c',
+  'sdb/src/ht_up.c',
+  'sdb/src/ht_pp.c',
   'sdb/src/journal.c',
   'sdb/src/json.c',
   'sdb/src/lock.c',
@@ -180,18 +191,12 @@ sdb_dep = declare_dependency(
   include_directories: sdb_inc
 )
 
-sdb_platform_inc = []
-if host_machine.system() == 'windows'
-  sdb_platform_inc = include_directories('sdb/msvc')
-endif
-
 # Create sdb_version.h
 sdb_version = '1.2.0'
 run_command(py3_exe, '-c', 'with open("sdb/src/sdb_version.h", "w") as f: f.write("#define SDB_VERSION \"' + sdb_version + '\"")')
 
 sdb_exe = executable('sdb', 'sdb/src/main.c',
   include_directories: [
-    sdb_platform_inc,
     include_directories(['sdb/src'])
   ],
   link_with: [libr2sdb],
@@ -618,3 +623,9 @@ ar_dep = declare_dependency(
   link_with: libr2ar,
   include_directories: ar_inc
 )
+
+
+# handle ptrace-wrap dependency
+if use_ptrace_wrap
+  subdir('ptrace-wrap')
+endif

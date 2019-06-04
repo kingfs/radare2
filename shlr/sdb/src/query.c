@@ -5,7 +5,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <unistd.h>
+#include <ctype.h>
 #include "sdb.h"
 
 typedef struct {
@@ -327,16 +327,11 @@ next_quote:
 		} else
 		if (!strcmp (cmd, "*")) {
 			ForeachListUser user = { out, encode, NULL };
-#if INSERTORDER
-			SdbList *list = sdb_foreach_list (s, false);
-#else
 			SdbList *list = sdb_foreach_list (s, true);
-#endif
 			SdbListIter *iter;
 			SdbKv *kv;
 			ls_foreach (list, iter, kv) {
-				//eprintf ("(%s)(%s)\n", kv->key, kv->value);
-				foreach_list_cb (&user, kv->key, kv->value);
+				foreach_list_cb (&user, sdbkv_key (kv), sdbkv_value (kv));
 			}
 			ls_free (list);
 			goto fail;
@@ -376,9 +371,9 @@ next_quote:
 			SdbListIter *li;
 			SdbList *l = sdb_foreach_match (s, cmd + 2, false);
 			ls_foreach (l, li, kv) {
-				strbuf_append (out, kv->key, 0);
+				strbuf_append (out, sdbkv_key (kv), 0);
 				strbuf_append (out, "=", 0);
-				strbuf_append (out, kv->value, 1);
+				strbuf_append (out, sdbkv_value (kv), 1);
 			}
 			fflush (stdout);
 			ls_free (l);
@@ -763,6 +758,14 @@ next_quote:
 				*json++ = 0;
 				ok = sdb_json_set (s, cmd, json, val, 0);
 			} else {
+				while (*val && isspace (*val)) {
+					val++;
+				}
+				int i = strlen (cmd) - 1;
+				while (i >= 0 && isspace (cmd[i])) {
+					cmd[i] = '\0';
+					i--;
+				}
 				ok = sdb_set (s, cmd, val, 0);
 			}
 			if (encode) {

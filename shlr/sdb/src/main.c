@@ -3,7 +3,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include "sdb.h"
 
@@ -184,6 +183,7 @@ static int sdb_grep_dump(const char *db, int fmt, bool grep,
 	}
 	while (sdb_dump_dupnext (s, k, &v, NULL)) {
 		if (grep && !strstr (k, expgrep) && !strstr (v, expgrep)) {
+			free (v);
 			continue;
 		}
 		switch (fmt) {

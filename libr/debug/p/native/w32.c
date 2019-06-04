@@ -182,9 +182,6 @@ static HANDLE (WINAPI *w32_CreateToolhelp32Snapshot)(DWORD, DWORD) = NULL;
 #define XSTATE_LEGACY_SSE 1
 #endif
 
-#if defined(XSTATE_MASK_GSSE) && defined (MINGW32)
-#undef XSTATE_MASK_GSSE
-#endif
 #if !defined(XSTATE_MASK_GSSE)
 #define XSTATE_MASK_GSSE (1LLU << (XSTATE_GSSE))
 #endif
@@ -487,7 +484,7 @@ err_get_file_name_from_handle:
 		CloseHandle (handle_file_map);
 	}
 	if (filename) {
-		char *filename_ = r_sys_conv_utf16_to_utf8(filename);
+		char *filename_ = r_sys_conv_win_to_utf8(filename);
 		free (filename);
 		return filename_;
 
@@ -712,14 +709,14 @@ static int w32_dbg_wait(RDebug *dbg, int pid) {
 			break;
 		case EXCEPTION_DEBUG_EVENT:
 			switch (de.u.Exception.ExceptionRecord.ExceptionCode) {
-#if __MINGW64__ || _WIN64
+#if _WIN64
 			case 0x4000001f: /* STATUS_WX86_BREAKPOINT */
 #endif
 			case EXCEPTION_BREAKPOINT:
 				ret = R_DEBUG_REASON_BREAKPOINT;
 				next_event = 0;
 				break;
-#if __MINGW64__ || _WIN64
+#if _WIN64
 			case 0x4000001e: /* STATUS_WX86_SINGLE_STEP */
 #endif
 			case EXCEPTION_SINGLE_STEP:
@@ -827,9 +824,9 @@ static RDebugPid *build_debug_pid(PROCESSENTRY32 *pe) {
 		CloseHandle(process);
 	}
 	if (*image_name) {
-		name = r_sys_conv_utf16_to_utf8 (image_name);
+		name = r_sys_conv_win_to_utf8 (image_name);
 	} else {
-		name = r_sys_conv_utf16_to_utf8 (pe->szExeFile);
+		name = r_sys_conv_win_to_utf8 (pe->szExeFile);
 	}
 	ret = r_debug_pid_new (name, pe->th32ProcessID, 0, 's', 0);
 	free (name);
@@ -998,7 +995,7 @@ static void printwincontext(HANDLE hThread, CONTEXT * ctx) {
 	ut64 mm[8];
 	ut16 top = 0;
 	int x = 0, nxmm = 0, nymm = 0;
-#if __MINGW64__ || _WIN64
+#if _WIN64
 	eprintf ("ControlWord   = %08x StatusWord   = %08x\n", ctx->FltSave.ControlWord, ctx->FltSave.StatusWord);
 	eprintf ("MxCsr         = %08x TagWord      = %08x\n", ctx->MxCsr, ctx->FltSave.TagWord);
 	eprintf ("ErrorOffset   = %08x DataOffset   = %08x\n", ctx->FltSave.ErrorOffset, ctx->FltSave.DataOffset);
@@ -1085,14 +1082,15 @@ static int w32_reg_read (RDebug *dbg, int type, ut8 *buf, int size) {
 	memset(&ctx, 0, sizeof (CONTEXT));
 	ctx.ContextFlags = CONTEXT_ALL ;
 	if (GetThreadContext (hThread, &ctx) == TRUE) {
-		if (type == R_REG_TYPE_GPR) {
+		// on windows we dont need check type alway read/write full arena
+		//if (type == R_REG_TYPE_GPR) {
 			if (size > sizeof (CONTEXT)) {
 				size = sizeof (CONTEXT);
 			}
 			memcpy (buf, &ctx, size);
-		} else {
-			size = 0;
-		}
+		//} else {
+		//	size = 0;
+		//}
 	} else {
 		r_sys_perror ("w32_reg_read/GetThreadContext");
 		size = 0;
@@ -1115,13 +1113,14 @@ static int w32_reg_write (RDebug *dbg, int type, const ut8* buf, int size) {
 	thread = w32_open_thread (dbg->pid, dbg->tid);
 	ctx.ContextFlags = CONTEXT_ALL;
 	GetThreadContext (thread, &ctx);
-	if (type == R_REG_TYPE_GPR) {
+	// on windows we dont need check type alway read/write full arena
+	//if (type == R_REG_TYPE_GPR) {
 		if (size > sizeof (CONTEXT)) {
 			size = sizeof (CONTEXT);
 		}
 		memcpy (&ctx, buf, size);
 		ret = SetThreadContext (thread, &ctx)? true: false;
-	}
+	//}
 	CloseHandle (thread);
 	return ret;
 }
@@ -1176,7 +1175,7 @@ static void w32_info_user(RDebug *dbg, RDebugInfo *rdi) {
 	if (*usr_dom) {
 		rdi->usr = r_str_newf (W32_TCHAR_FSTR"\\"W32_TCHAR_FSTR, usr_dom, usr);		
 	} else {
-		rdi->usr = r_sys_conv_utf16_to_utf8 (usr);
+		rdi->usr = r_sys_conv_win_to_utf8 (usr);
 	}
 err_w32_info_user:
     if (h_proc) {
@@ -1211,7 +1210,7 @@ static void w32_info_exe(RDebug *dbg, RDebugInfo *rdi) {
 	len = MAX_PATH;
 	if (w32_QueryFullProcessImageName (h_proc, 0, path, &len)) {
 		path[len] = '\0';
-		rdi->exe = r_sys_conv_utf16_to_utf8 (path);
+		rdi->exe = r_sys_conv_win_to_utf8 (path);
 	} else {
 		r_sys_perror ("w32_info_exe/QueryFullProcessImageName");
 	}

@@ -158,11 +158,10 @@ int pic_midrange_disassemble (RAsmOp *op, char *opbuf, const ut8 *b, int l) {
 	char fsr_op[6];
 	st16 branch;
 
-#define EMIT_INVALID                                                         \
-	{                                                                    \
-		op->size = 2;                                                \
+#define EMIT_INVALID {\
+		op->size = 2; \
 		strcpy (opbuf, "invalid"); \
-		return 1;                                                    \
+		return 1; \
 	}
 	if (!b || l < 2) {
 		EMIT_INVALID

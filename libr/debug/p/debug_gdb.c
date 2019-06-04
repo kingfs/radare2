@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2017 - pancake, defragger */
+/* radare - LGPL - Copyright 2009-2018 - pancake, defragger */
 
 #include <r_asm.h>
 #include <r_debug.h>
@@ -13,6 +13,7 @@ typedef struct {
 #define UNSUPPORTED 0
 #define SUPPORTED 1
 
+static RIOGdb ** origriogdb = NULL;
 static libgdbr_t *desc = NULL;
 static ut8* reg_buf = NULL;
 static int buf_size = 0;
@@ -28,6 +29,9 @@ static void check_connection (RDebug *dbg) {
 
 static int r_debug_gdb_step(RDebug *dbg) {
 	check_connection (dbg);
+	if (!desc) {
+		return R_DEBUG_REASON_UNKNOWN;
+	}
 	gdbr_step (desc, -1); // TODO handle thread specific step?
 	return true;
 }
@@ -44,6 +48,9 @@ static int r_debug_gdb_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 	int copy_size;
 	int buflen = 0;
 	check_connection (dbg);
+	if (!desc) {
+		return R_DEBUG_REASON_UNKNOWN;
+	}
 	gdbr_read_registers (desc);
 	if (!desc || !desc->data) {
 		return -1;
@@ -92,7 +99,7 @@ static int r_debug_gdb_reg_read(RDebug *dbg, int type, ut8 *buf, int size) {
 
 static RList *r_debug_gdb_map_get(RDebug* dbg) { //TODO
 	check_connection (dbg);
-	if (desc->pid <= 0) {
+	if (!desc || desc->pid <= 0) {
 		return NULL;
 	}
 	RList *retlist = NULL;
@@ -264,6 +271,9 @@ static RList* r_debug_gdb_modules_get(RDebug *dbg) {
 
 static int r_debug_gdb_reg_write(RDebug *dbg, int type, const ut8 *buf, int size) {
 	check_connection (dbg);
+	if (!desc) {
+		return R_DEBUG_REASON_UNKNOWN;
+	}
 	if (!reg_buf) {
 		// we cannot write registers before we once read them
 		return -1;
@@ -308,6 +318,9 @@ static int r_debug_gdb_reg_write(RDebug *dbg, int type, const ut8 *buf, int size
 
 static int r_debug_gdb_continue(RDebug *dbg, int pid, int tid, int sig) {
 	check_connection (dbg);
+	if (!desc) {
+		return R_DEBUG_REASON_UNKNOWN;
+	}
 	gdbr_continue (desc, pid, -1, sig); // Continue all threads
 	if (desc->stop_reason.is_valid && desc->stop_reason.thread.present) {
 		//if (desc->tid != desc->stop_reason.thread.tid) {
@@ -320,6 +333,9 @@ static int r_debug_gdb_continue(RDebug *dbg, int pid, int tid, int sig) {
 
 static RDebugReasonType r_debug_gdb_wait(RDebug *dbg, int pid) {
 	check_connection (dbg);
+	if (!desc) {
+		return R_DEBUG_REASON_UNKNOWN;
+	}
 	if (!desc->stop_reason.is_valid) {
 		if (gdbr_stop_reason (desc) < 0) {
 			dbg->reason.type = R_DEBUG_REASON_UNKNOWN;
@@ -348,6 +364,7 @@ static int r_debug_gdb_attach(RDebug *dbg, int pid) {
 	if (d && d->plugin && d->plugin->name && d->data) {
 		if (!strcmp ("gdb", d->plugin->name)) {
 			RIOGdb *g = d->data;
+			origriogdb = (RIOGdb **)&d->data;	//TODO bit of a hack, please improve
 			support_sw_bp = UNKNOWN;
 			support_hw_bp = UNKNOWN;
 			int arch = r_sys_arch_id (dbg->arch);
@@ -1029,7 +1046,8 @@ static bool r_debug_gdb_kill(RDebug *dbg, int pid, int tid, int sig) {
 }
 
 static int r_debug_gdb_select(int pid, int tid) {
-	if (!desc) {
+	if (!desc  || !*origriogdb ) {
+		desc = NULL;	//TODO hacky fix, please improve. I would suggest using a **desc instead of a *desc, so it is automatically updated
 		return false;
 	}
 	return gdbr_select (desc, pid, tid) >= 0;

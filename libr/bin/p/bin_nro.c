@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2017-2018 - pancake */
+/* radare2 - LGPL - Copyright 2017-2019 - pancake */
 
 // TODO: Support NRR and MODF
 #include <r_types.h>
@@ -30,39 +30,26 @@ static ut64 baddr(RBinFile *bf) {
 	return bf? readLE32 (bf->buf, NRO_OFFSET_MODMEMOFF): 0;
 }
 
-static bool check_bytes(const ut8 *buf, ut64 length) {
-	if (buf && length >= 0x20) {
-		return fileType (buf + NRO_OFF (magic)) != NULL;
+static bool check_buffer(RBuffer *b) {
+	ut8 magic[4];
+	if (r_buf_read_at (b, NRO_OFF (magic), magic, sizeof (magic)) == 4) {
+		return fileType (magic) != NULL;
 	}
 	return false;
 }
 
-static void *load_bytes(RBinFile *bf, const ut8 *buf, ut64 sz, ut64 loadaddr, Sdb *sdb) {
+static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb) {
+	// XX bf->buf vs b :D this load_b
 	RBinNXOObj *bin = R_NEW0 (RBinNXOObj);
-	if (!bin) {
-		return NULL;
+	if (bin) {
+		ut64 ba = baddr (bf);
+		bin->methods_list = r_list_newf ((RListFree)free);
+		bin->imports_list = r_list_newf ((RListFree)free);
+		bin->classes_list = r_list_newf ((RListFree)free);
+		ut32 mod0 = readLE32 (b, NRO_OFFSET_MODMEMOFF);
+		parseMod (b, bin, mod0, ba);
+		*bin_obj = bin;
 	}
-	ut64 ba = baddr (bf);
-	bin->methods_list = r_list_newf ((RListFree)free);
-	bin->imports_list = r_list_newf ((RListFree)free);
-	bin->classes_list = r_list_newf ((RListFree)free);
-	ut32 mod0 = readLE32 (bf->buf, NRO_OFFSET_MODMEMOFF);
-	parseMod (bf->buf, bin, mod0, ba);
-	return (void *) bin;//(size_t) check_bytes (buf, sz);
-}
-
-static bool load(RBinFile *bf) {
-	if (!bf || !bf->buf || !bf->o) {
-		return false;
-	}
-	const ut64 sz = r_buf_size (bf->buf);
-	const ut64 la = bf->o->loadaddr;
-	const ut8 *bytes = r_buf_buffer (bf->buf);
-	bf->o->bin_obj = load_bytes (bf, bytes, sz, la, bf->sdb);
-	return bf->o->bin_obj != NULL;
-}
-
-static int destroy(RBinFile *bf) {
 	return true;
 }
 
@@ -114,7 +101,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strncpy (ptr->name, "header", R_BIN_SIZEOF_STRINGS);
+	ptr->name = strdup ("header");
 	ptr->size = 0x80;
 	ptr->vsize = 0x80;
 	ptr->paddr = 0;
@@ -131,7 +118,7 @@ static RList *sections(RBinFile *bf) {
 			return ret;
 		}
 		ut32 mod0sz = readLE32 (bf->buf, mod0 + 4);
-		strncpy (ptr->name, "mod0", R_BIN_SIZEOF_STRINGS);
+		ptr->name = strdup ("mod0");
 		ptr->size = mod0sz;
 		ptr->vsize = mod0sz;
 		ptr->paddr = mod0;
@@ -149,7 +136,7 @@ static RList *sections(RBinFile *bf) {
 			return ret;
 		}
 		ut32 sig0sz = readLE32 (bf->buf, sig0 + 4);
-		strncpy (ptr->name, "sig0", R_BIN_SIZEOF_STRINGS);
+		ptr->name = strdup ("sig0");
 		ptr->size = sig0sz;
 		ptr->vsize = sig0sz;
 		ptr->paddr = sig0;
@@ -165,7 +152,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strncpy (ptr->name, "text", R_BIN_SIZEOF_STRINGS);
+	ptr->name = strdup ("text");
 	ptr->vsize = readLE32 (b, NRO_OFF (text_size));
 	ptr->size = ptr->vsize;
 	ptr->paddr = readLE32 (b, NRO_OFF (text_memoffset));
@@ -178,7 +165,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strncpy (ptr->name, "ro", R_BIN_SIZEOF_STRINGS);
+	ptr->name = strdup ("ro");
 	ptr->vsize = readLE32 (b, NRO_OFF (ro_size));
 	ptr->size = ptr->vsize;
 	ptr->paddr = readLE32 (b, NRO_OFF (ro_memoffset));
@@ -191,7 +178,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strncpy (ptr->name, "data", R_BIN_SIZEOF_STRINGS);
+	ptr->name = strdup ("data");
 	ptr->vsize = readLE32 (b, NRO_OFF (data_size));
 	ptr->size = ptr->vsize;
 	ptr->paddr = readLE32 (b, NRO_OFF (data_memoffset));
@@ -211,9 +198,6 @@ static RList *symbols(RBinFile *bf) {
 		return NULL;
 	}
 	bin = (RBinNXOObj*) bf->o->bin_obj;
-	if (!bin) {
-		return NULL;
-	}
 	return bin->methods_list;
 }
 
@@ -223,9 +207,6 @@ static RList *imports(RBinFile *bf) {
 		return NULL;
 	}
 	bin = (RBinNXOObj*) bf->o->bin_obj;
-	if (!bin) {
-		return NULL;
-	}
 	return bin->imports_list;
 }
 
@@ -238,7 +219,9 @@ static RBinInfo *info(RBinFile *bf) {
 	if (!ret) {
 		return NULL;
 	}
-	const char *ft = fileType (r_buf_get_at (bf->buf, NRO_OFF (magic), NULL));
+	ut8 magic[4];
+	r_buf_read_at (bf->buf, NRO_OFF (magic), magic, sizeof (magic));
+	const char *ft = fileType (magic);
 	if (!ft) {
 		ft = "nro";
 	}
@@ -273,10 +256,8 @@ RBinPlugin r_bin_plugin_nro = {
 	.name = "nro",
 	.desc = "Nintendo Switch NRO0 binaries",
 	.license = "MIT",
-	.load = &load,
-	.load_bytes = &load_bytes,
-	.destroy = &destroy,
-	.check_bytes = &check_bytes,
+	.load_buffer = &load_buffer,
+	.check_buffer = &check_buffer,
 	.baddr = &baddr,
 	.binsym = &binsym,
 	.entries = &entries,

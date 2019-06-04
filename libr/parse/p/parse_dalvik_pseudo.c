@@ -149,6 +149,7 @@ static int replace(int argc, const char *argv[], char *newstr) {
 		{ "invoke-static", "call 2 1"},
 		{ "invoke-super", "call super 2 1"},
 		{ "invoke-super/range", "call super 2 1"},
+		{ "invoke-polymorphic", "call polymorphic 2 1" },
 		{ "invoke-virtual/range", "call 2 1"},
 		{ "invoke-virtual", "call 2 1"},
 		{ "+invoke-virtual-quick", "call 2 1"},
@@ -329,12 +330,15 @@ static int parse(RParse *p, const char *data, char *str) {
 #endif
 	if (!strcmp (w1, w2)) {
 		char a[32], b[32];
-#define REPLACE(x,y) \
-		sprintf (a, x, w1, w1); \
-		sprintf (b, y, w1); \
-		p = r_str_replace (p, a, b, 0);
+#define REPLACE(x,y) do { \
+		int snprintf_len1_ = snprintf (a, 32, x, w1, w1); \
+		int snprintf_len2_ = snprintf (b, 32, y, w1); \
+		if (snprintf_len1_ < 32 && snprintf_len2_ < 32) { \
+			p = r_str_replace (p, a, b, 0); \
+		} \
+	} while (0)
 
-// TODO: optimize
+		// TODO: optimize
 		REPLACE ("%s = %s +", "%s +=");
 		REPLACE ("%s = %s -", "%s -=");
 		REPLACE ("%s = %s &", "%s &=");

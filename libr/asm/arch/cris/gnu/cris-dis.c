@@ -106,13 +106,12 @@ bfd_boolean
 cris_parse_disassembler_options (disassemble_info *info,
 				 enum cris_disass_family distype)
 {
-  struct cris_disasm_data *disdata;
-
-  info->private_data = calloc (1, sizeof (struct cris_disasm_data));
-  disdata = (struct cris_disasm_data *) info->private_data;
+  struct cris_disasm_data *disdata = (struct cris_disasm_data *) info->private_data;
   if (!disdata) {
 	  return FALSE;
   }
+
+  info->private_data = calloc (1, sizeof (struct cris_disasm_data));
 
   /* Default true.  */
   disdata->trace_case
@@ -193,52 +192,40 @@ get_opcode_entry (unsigned int insn,
   /* Allocate and clear the opcode-table.  */
   if (!opc_table)
     {
-      opc_table = malloc (65536 * sizeof (opc_table[0]));
+      opc_table = calloc (65536, sizeof (opc_table[0]));
       if (!opc_table) {
 	      return NULL;
       }
 
-      memset (opc_table, 0, 65536 * sizeof (const struct cris_opcode *));
-
       dip_prefixes
-	= malloc (65536 * sizeof (const struct cris_opcode **));
+	= calloc (65536, sizeof (dip_prefixes[0]));
       if (!dip_prefixes) {
 	      return NULL;
       }
 
-      memset (dip_prefixes, 0, 65536 * sizeof (dip_prefixes[0]));
-
       bdapq_m1_prefixes
-	= malloc (65536 * sizeof (const struct cris_opcode **));
+	= calloc (65536, sizeof (bdapq_m1_prefixes[0]));
       if (!bdapq_m1_prefixes) {
 	      return NULL;
       }
 
-      memset (bdapq_m1_prefixes, 0, 65536 * sizeof (bdapq_m1_prefixes[0]));
-
       bdapq_m2_prefixes
-	= malloc (65536 * sizeof (const struct cris_opcode **));
+	= calloc (65536, sizeof (bdapq_m2_prefixes[0]));
       if (!bdapq_m2_prefixes) {
 	      return NULL;
       }
 
-      memset (bdapq_m2_prefixes, 0, 65536 * sizeof (bdapq_m2_prefixes[0]));
-
       bdapq_m4_prefixes
-	= malloc (65536 * sizeof (const struct cris_opcode **));
+	= calloc (65536, sizeof (bdapq_m4_prefixes[0]));
       if (!bdapq_m4_prefixes) {
 	      return NULL;
       }
 
-      memset (bdapq_m4_prefixes, 0, 65536 * sizeof (bdapq_m4_prefixes[0]));
-
       rest_prefixes
-	= malloc (65536 * sizeof (const struct cris_opcode **));
+	= calloc (65536, sizeof (rest_prefixes[0]));
       if (!rest_prefixes) {
 	      return NULL;
       }
-
-      memset (rest_prefixes, 0, 65536 * sizeof (rest_prefixes[0]));
     }
 
   /* Get the right table if this is a prefix.
@@ -1566,7 +1553,7 @@ print_insn_cris_generic (bfd_vma memaddr,
 
 /* Disassemble, prefixing register names with `$'.  CRIS v0..v10.  */
 
-static int
+int
 print_insn_cris_with_register_prefix (bfd_vma vma,
 				      disassemble_info *info)
 {
@@ -1578,7 +1565,7 @@ print_insn_cris_with_register_prefix (bfd_vma vma,
 
 /* Disassemble, prefixing register names with `$'.  CRIS v32.  */
 
-static int
+int
 print_insn_crisv32_with_register_prefix (bfd_vma vma,
 					 disassemble_info *info)
 {
@@ -1603,7 +1590,7 @@ print_insn_crisv10_v32_with_register_prefix (bfd_vma vma,
 
 /* Disassemble, no prefixes on register names.  CRIS v0..v10.  */
 
-static int
+int
 print_insn_cris_without_register_prefix (bfd_vma vma,
 					 disassemble_info *info)
 {
@@ -1643,9 +1630,11 @@ print_insn_crisv10_v32_without_register_prefix (bfd_vma vma,
    FIXME: We should improve the solution to avoid the multitude of
    functions seen above.  */
 
+#define CR16_SUPPORTS_CPU 0
 disassembler_ftype
 cris_get_disassembler (bfd *abfd)
 {
+#if CR16_SUPPORTS_CPU
 const int mode = 0; // V32 by default
   /* If there's no bfd in sight, we return what is valid as input in all
      contexts if fed back to the assembler: disassembly *with* register
@@ -1678,6 +1667,9 @@ case 1: // V10_V32
 default:
   return print_insn_cris_without_register_prefix;
 }
+#else
+	return print_insn_crisv32_without_register_prefix;
+#endif
 }
 
 /* Local variables:

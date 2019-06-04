@@ -40,6 +40,10 @@ makeDeb() {
 	sudo tar xpzvf /tmp/r2ios-${CPU}.tar.gz -C sys/cydia/radare2/root
 	rm -f sys/cydia/radare2/root/${PREFIX}/lib/*.dSYM
 	rm -f sys/cydia/radare2/root/${PREFIX}/lib/*.a
+        for a in sys/cydia/radare2/root/usr/bin/* sys/cydia/radare2/root/usr/lib/*.dylib ; do
+		echo "Signing $a"
+		ldid2 -Sbinr/radare2/radare2_ios.xml $a
+	done
 if [ "${STOW}" = 1 ]; then
 	(
 		cd sys/cydia/radare2/root/
@@ -71,7 +75,7 @@ if [ $onlymakedeb = 1 ]; then
 else
 	if [ $fromscratch = 1 ]; then
 		make clean
-		./configure --prefix="${PREFIX}" --with-ostype=darwin \
+		./configure --prefix="${PREFIX}" --with-ostype=darwin --without-libuv \
 			--with-compiler=ios-sdk --target=arm-unknown-darwin
 		RV=$?
 	else

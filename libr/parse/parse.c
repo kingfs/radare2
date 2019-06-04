@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2018 - nibble, pancake, maijin */
+/* radare2 - LGPL - Copyright 2009-2019 - nibble, pancake, maijin */
 
 #include <stdio.h>
 
@@ -23,8 +23,8 @@ R_API RParse *r_parse_new() {
 		return NULL;
 	}
 	p->parsers->free = NULL; // memleak
-	p->notin_flagspace = -1;
-	p->flagspace = -1;
+	p->notin_flagspace = NULL;
+	p->flagspace = NULL;
 	p->pseudo = false;
 	p->relsub = false;
 	p->tailsub = false;
@@ -80,7 +80,7 @@ R_API int r_parse_assemble(RParse *p, char *data, char *str) {
 			}
 			if (s) {
 				str = s + 1;
-				o = o + strlen (data);
+				o += strlen (data);
 				o[0] = '\n';
 				o[1] = '\0';
 				o++;
@@ -91,8 +91,10 @@ R_API int r_parse_assemble(RParse *p, char *data, char *str) {
 	return ret;
 }
 
+// parse 'data' and generate pseudocode disassemble in 'str'
+// TODO: refactooring, this should return char * instead
 R_API int r_parse_parse(RParse *p, const char *data, char *str) {
-	if (p->cur && p->cur->parse) {
+	if (p && data && *data && p->cur && p->cur->parse) {
 		return p->cur->parse (p, data, str);
 	}
 	return false;
@@ -105,6 +107,9 @@ R_API int r_parse_parse(RParse *p, const char *data, char *str) {
 
 static bool isvalidflag(RFlagItem *flag) {
 	if (flag) {
+		if (strstr (flag->name, "main") || strstr (flag->name, "entry")) {
+			return true;
+		}
 		if (strchr (flag->name, '.')) {
 			return strncmp (flag->name, "section.", 8);
 		}
@@ -123,25 +128,13 @@ static char *findNextNumber(char *op) {
 		if (p[0] == 0x1b && p[1] == '[') {
 			ansi_found = true;
 			p += 2;
-			if (p[0] && p[1] == ';') {
-				// "\x1b[%d;2;%d;%d;%dm", fgbg, r, g, b
-				// "\x1b[%d;5;%dm", fgbg, rgb (r, g, b)
-				for (; p[0] && p[1] && p[0] != 0x1b && p[1] != '\\'; p++) {
-					;
-				}
-				if (p[0] && p[1] == '\\') {
-					p++;
-				}
-			} else {
-				// "\x1b[%dm", 30 + k
-				for (; *p && *p != 'J' && *p != 'm' && *p != 'H'; p++) {
-					;
-				}
-				if (*p) {
-					p++;
-					if (!*p) {
-						break;
-					}
+			for (; *p && *p != 'J' && *p != 'm' && *p != 'H'; p++) {
+				;
+			}
+			if (*p) {
+				p++;
+				if (!*p) {
+					break;
 				}
 			}
 			o = p - 1;
@@ -197,12 +190,50 @@ static void insert(char *dst, const char *src) {
 	free (endNum);
 }
 
-static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len, bool big_endian) {
+// TODO: move into r_util/r_str
+static void replaceWords(char *s, const char *k, const char *v) {
+	for (;;) {
+		char *p = strstr (s, k);
+		if (!p) {
+			break;
+		}
+		char *s = p + strlen (k);
+		char *d = p + strlen (v);
+		memmove (d, s, strlen (s) + 1);
+		memmove (p, v, strlen (v));
+		s = p + strlen (v);
+	}
+}
+
+static void replaceRegisters (RReg *reg, char *s, bool x86) {
+	int i;
+	for (i = 0; i < 64; i++) {
+		const char *k = r_reg_get_name (reg, i);
+		if (!k || i == R_REG_NAME_PC) {
+			continue;
+		}
+		const char *v = r_reg_get_role (i);
+		if (!v) {
+			break;
+		}
+		if (x86 && *k == 'r') {
+			replaceWords (s, k, v);
+			char *reg32 = strdup (k);
+			*reg32 = 'e';
+			replaceWords (s, reg32, v);
+		} else {
+			replaceWords (s, k, v);
+		}
+	}
+}
+
+static int filter(RParse *p, ut64 addr, RFlag *f, RAnalHint *hint, char *data, char *str, int len, bool big_endian) {
 	char *ptr = data, *ptr2, *ptr_backup;
 	RAnalFunction *fcn;
 	RFlagItem *flag;
 	ut64 off;
 	bool x86 = false;
+	bool arm = false;
 	bool computed = false;
 	if (p && p->cur && p->cur->name) {
 		if (strstr (p->cur->name, "x86")) {
@@ -211,39 +242,32 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 		if (strstr (p->cur->name, "m68k")) {
 			x86 = true;
 		}
+		if (strstr (p->cur->name, "arm")) {
+			arm = true;
+		}
 	}
 	if (!data || !p) {
 		return 0;
 	}
 #if FILTER_DWORD
-	ptr2 = strstr (ptr, "dword ");
-	if (ptr2) {
-		char *src = ptr2 + 6;
-		memmove (ptr2, src, strlen (src) + 1);
-	}
-	ptr2 = strstr (ptr, "qword ");
-	if (ptr2) {
-		char *src = ptr2 + 6;
-		memmove (ptr2, src, strlen (src) + 1);
-	}
+	replaceWords (ptr, "dword ", src);
+	replaceWords (ptr, "qword ", src);
 #endif
+	if (p->regsub) {
+		replaceRegisters (p->analb.anal->reg, ptr, false);
+		if (x86) {
+			replaceRegisters (p->analb.anal->reg, ptr, true);
+		}
+	}
 	ptr2 = NULL;
 	// remove "dword" 2
 	char *nptr;
-	while ((nptr = findNextNumber (ptr))) {
-#if 0
-		char *optr = ptr;
-		if (nptr[1]== ' ') {
-			for (nptr++;*nptr && *nptr >='0' && *nptr <= '9'; nptr++) {
-			}
-			ptr = nptr;
-			continue;
-		}
-#endif
+	int count = 0;
+	for (count = 0; (nptr = findNextNumber (ptr)) ; count++) {
 		ptr = nptr;
 		if (x86) {
 			for (ptr2 = ptr; *ptr2 && !isx86separator (*ptr2); ptr2++) {
-		//		eprintf ("(%s) (%c)\n", optr, *ptr2);
+				;
 			}
 		} else {
 			for (ptr2 = ptr; *ptr2 && (*ptr2 != ']' && (*ptr2 != '\x1b') && !IS_SEPARATOR (*ptr2)); ptr2++) {
@@ -252,7 +276,7 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 		}
 		off = r_num_math (NULL, ptr);
 		if (off >= p->minval) {
-			fcn = p->analb.get_fcn_in (p->anal, off, 0);
+			fcn = p->analb.get_fcn_in (p->analb.anal, off, 0);
 			if (fcn && fcn->addr == off) {
 				*ptr = 0;
 				// hack to realign pointer for colours
@@ -266,27 +290,21 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 			}
 			if (f) {
 				RFlagItem *flag2;
-				flag = r_flag_get_i2 (f, off);
+				flag = p->flag_get (f, off);
 				computed = false;
-				if (!flag) {
-					flag = r_flag_get_i (f, off);
-				}
-				if (!flag && p->relsub_addr) {
+				if ((!flag || arm) && p->relsub_addr) {
 					computed = true;
-					flag2 = r_flag_get_i2 (f, p->relsub_addr);
-					if (!flag2) {
-						flag2 = r_flag_get_i (f, p->relsub_addr);
-					}
-					if (!flag) {
+					flag2 = p->flag_get (f, p->relsub_addr);
+					if (!flag || arm) {
 						flag = flag2;
 					}
 				}
 				if (isvalidflag (flag)) {
-					if (p->notin_flagspace != -1) {
+					if (p->notin_flagspace) {
 						if (p->flagspace == flag->space) {
 							continue;
 						}
-					} else if (p->flagspace != -1 && (p->flagspace != flag->space)) {
+					} else if (p->flagspace && (p->flagspace != flag->space)) {
 						ptr = ptr2;
 						continue;
 					}
@@ -308,8 +326,36 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 						}
 					}
 					*ptr = 0;
-					snprintf (str, len, "%s%s%s", data, f->realnames? flag->realname : flag->name,
-							(ptr != ptr2) ? ptr2 : "");
+					char *flagname = strdup (f->realnames? flag->realname : flag->name);
+					int maxflagname = p->maxflagnamelen;
+					if (maxflagname > 0 && strlen (flagname) > maxflagname) {
+						char *doublelower = (char *)r_str_rstr (flagname, "__");
+						char *doublecolon = (char *)r_str_rstr (flagname, "::");
+						char *token = NULL;
+						if (doublelower && doublecolon) {
+							token = R_MAX (doublelower, doublecolon);
+						} else {
+							token = doublelower? doublelower: doublecolon;
+						}
+						if (token) {
+							const char *mod = doublecolon? "(cxx)": "(...)";
+							char *newstr = r_str_newf ("%s%s", mod, token);
+							free (flagname);
+							flagname = newstr;
+						} else {
+							const char *lower = r_str_rstr (flagname, "_");
+							char *newstr;
+							if (lower) {
+								newstr = r_str_newf ("..%s", lower + 1);
+							} else {
+								newstr = r_str_newf ("..%s", flagname + (strlen (flagname) - maxflagname));
+							}
+							free (flagname);
+							flagname = newstr;
+						}
+					}
+					snprintf (str, len, "%s%s%s", data, flagname, (ptr != ptr2) ? ptr2 : "");
+					free (flagname);
 					bool banned = false;
 					{
 						const char *p = strchr (str, '[');
@@ -378,7 +424,7 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 					}
 					return true;
 				}
-				if (p->tailsub) { //  && off > UT32_MAX && addr > UT32_MAX) {
+				if (p->tailsub) { //  && off > UT32_MAX && addr > UT32_MAX)
 					if (off != UT64_MAX) {
 						if (off == addr) {
 							insert (ptr, "$$");
@@ -394,14 +440,19 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 				}
 			}
 		}
-		if (p->hint) {
-			int pnumleft, immbase = p->hint->immbase;
+		if (hint) {
+			const int nw = hint->nword;
+			if (count != nw) {
+				ptr = ptr2;
+				continue;
+			}
+			int pnumleft, immbase = hint->immbase;
 			char num[256] = {0}, *pnum, *tmp;
 			bool is_hex = false;
 			int tmp_count;
-			if (p->hint->offset) {
+			if (hint->offset) {
 				*ptr = 0;
-				snprintf (str, len, "%s%s%s", data, p->hint->offset, (ptr != ptr2)? ptr2: "");
+				snprintf (str, len, "%s%s%s", data, hint->offset, (ptr != ptr2)? ptr2: "");
 				return true;
 			}
 			strncpy (num, ptr, sizeof (num)-2);
@@ -514,9 +565,9 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 				}
 				break;
 			case 80:
-				if (p && p->anal && p->anal->syscall) {
+				if (p && p->analb.anal && p->analb.anal->syscall) {
 					RSyscallItem *si;
-					si = r_syscall_get (p->anal->syscall, off, -1);
+					si = r_syscall_get (p->analb.anal->syscall, off, -1);
 					if (si) {
 						snprintf (num, sizeof (num), "%s()", si->name);
 					} else {
@@ -540,7 +591,7 @@ static int filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len
 	return false;
 }
 
-R_API char *r_parse_immtrim (char *opstr) {
+R_API char *r_parse_immtrim(char *opstr) {
 	if (!opstr || !*opstr) {
 		return NULL;
 	}
@@ -570,12 +621,26 @@ R_API char *r_parse_immtrim (char *opstr) {
 	return opstr;
 }
 
-R_API int r_parse_filter(RParse *p, ut64 addr, RFlag *f, char *data, char *str, int len, bool big_endian) {
-	filter (p, addr, f, data, str, len, big_endian);
+/// filter the opcode in data into str by following the flags and hints information
+// XXX this function have too many parameters, we need to simplify this
+R_API int r_parse_filter(RParse *p, ut64 addr, RFlag *f, RAnalHint *hint, char *data, char *str, int len, bool big_endian) {
+	filter (p, addr, f, hint, data, str, len, big_endian);
 	if (p->cur && p->cur->filter) {
 		return p->cur->filter (p, addr, f, data, str, len, big_endian);
 	}
 	return false;
+}
+
+R_API char *r_parse_new_filter(RParse *p, ut64 addr, const char *opstr) {
+#if 0
+	RAnalHint *hint = p->analb.get_hint (p->analb.anal, addr);
+	RFlag *f = NULL;
+	filter (p, addr, f, hint, data, str, len, big_endian);
+	if (p->cur && p->cur->filter) {
+		return p->cur->filter (p, addr, f, data, str, len, big_endian);
+	}
+#endif
+	return NULL;
 }
 
 R_API bool r_parse_varsub(RParse *p, RAnalFunction *f, ut64 addr, int oplen, char *data, char *str, int len) {
@@ -588,10 +653,6 @@ R_API bool r_parse_varsub(RParse *p, RAnalFunction *f, ut64 addr, int oplen, cha
 /* setters */
 R_API void r_parse_set_user_ptr(RParse *p, void *user) {
 	p->user = user;
-}
-
-R_API void r_parse_set_flagspace(RParse *p, int fs) {
-	p->flagspace = fs;
 }
 
 /* TODO: DEPRECATE */

@@ -68,11 +68,11 @@ typedef struct _PE_RESOURCE {
 	char *timestr;
 	char *type;
 	char *language;
-	int name;
+	char *name;
 	Pe_image_resource_data_entry *data;
 } r_pe_resource;
 
-#define GUIDSTR_LEN 34
+#define GUIDSTR_LEN 41
 #define DBG_FILE_NAME_LEN 255
 
 typedef struct SDebugInfo {
@@ -120,7 +120,7 @@ struct PE_(r_bin_pe_obj_t) {
 	RList* relocs;
 	RList* resources; //RList of r_pe_resources
 	const char* file;
-	struct r_buf_t* b;
+	RBuffer* b;
 	Sdb *kv;
 	RCMS* cms;
 	bool is_signed;
@@ -150,7 +150,7 @@ int PE_(r_bin_pe_is_stripped_local_syms)(struct PE_(r_bin_pe_obj_t)* bin);
 int PE_(r_bin_pe_is_stripped_debug)(struct PE_(r_bin_pe_obj_t)* bin);
 void* PE_(r_bin_pe_free)(struct PE_(r_bin_pe_obj_t)* bin);
 struct PE_(r_bin_pe_obj_t)* PE_(r_bin_pe_new)(const char* file, bool verbose);
-struct PE_(r_bin_pe_obj_t)* PE_(r_bin_pe_new_buf)(struct r_buf_t* buf, bool verbose);
+struct PE_(r_bin_pe_obj_t)* PE_(r_bin_pe_new_buf)(RBuffer* buf, bool verbose);
 int PE_(r_bin_pe_get_debug_data)(struct PE_(r_bin_pe_obj_t)* bin, struct SDebugInfo* res);
 int PE_(bin_pe_get_claimed_checksum)(struct PE_(r_bin_pe_obj_t)* bin);
 int PE_(bin_pe_get_actual_checksum)(struct PE_(r_bin_pe_obj_t)* bin);
@@ -159,5 +159,5 @@ void PE_(r_bin_pe_check_sections)(struct PE_(r_bin_pe_obj_t)* bin, struct r_bin_
 struct r_bin_pe_addr_t *PE_(check_unknow) (struct PE_(r_bin_pe_obj_t) *bin);
 struct r_bin_pe_addr_t *PE_(check_msvcseh) (struct PE_(r_bin_pe_obj_t) *bin);
 struct r_bin_pe_addr_t *PE_(check_mingw) (struct PE_(r_bin_pe_obj_t) *bin);
-bool PE_(r_bin_pe_section_perms)(struct PE_(r_bin_pe_obj_t) *bin, const char *name, int perms);
+bool PE_(r_bin_pe_section_perms)(RBinFile *bf, const char *name, int perms);
 R_API void PE_(bin_pe_parse_resource) (struct PE_(r_bin_pe_obj_t) *bin);

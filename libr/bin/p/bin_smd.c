@@ -95,16 +95,17 @@ static ut64 baddr(RBinFile *bf) {
 	return 0;
 }
 
-static bool check_bytes(const ut8 *buf, ut64 length) {
-	if (length > 0x190 && !memcmp (buf + 0x100, "SEGA", 4)) {
-		return true;
+static bool check_buffer(RBuffer *b) {
+	if (r_buf_size (b) > 0x190) {
+		ut8 buf[4];
+		r_buf_read_at (b, 0x100, buf, sizeof (buf));
+		return !memcmp (buf, "SEGA", 4);
 	}
 	return false;
 }
 
-static void *load_bytes(RBinFile *bf, const ut8 *buf, ut64 sz, ut64 loadaddr, Sdb *sdb){
-	check_bytes (buf, sz);
-	return R_NOTNULL;
+static bool load_buffer(RBinFile *bf, void **bin_obj, RBuffer *b, ut64 loadaddr, Sdb *sdb){
+	return check_buffer (b);
 }
 
 static RBinInfo *info(RBinFile *bf) {
@@ -115,11 +116,14 @@ static RBinInfo *info(RBinFile *bf) {
 	ret->file = strdup (bf->file);
 	ret->type = strdup ("ROM");
 	ret->machine = strdup ("Sega Megadrive");
-	ret->bclass = r_str_ndup ((char *) bf->buf->buf + 0x100, 32);
+	ut8 tmp[32];
+	r_buf_read_at (bf->buf, 0x100, tmp, sizeof (tmp));
+	ret->bclass = r_str_ndup ((char *)tmp, 32);
 	ret->os = strdup ("smd");
 	ret->arch = strdup ("m68k");
 	ret->bits = 16;
 	ret->has_va = 1;
+	ret->big_endian = 1;
 	return ret;
 }
 
@@ -256,7 +260,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strcpy (ptr->name, "vtable");
+	ptr->name = strdup ("vtable");
 	ptr->paddr = ptr->vaddr = 0;
 	ptr->size = ptr->vsize = 0x100;
 	ptr->perm = R_PERM_R;
@@ -266,7 +270,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strcpy (ptr->name, "header");
+	ptr->name = strdup ("header");
 	ptr->paddr = ptr->vaddr = 0x100;
 	ptr->size = ptr->vsize = sizeof (SMD_Header);
 	ptr->perm = R_PERM_R;
@@ -276,7 +280,7 @@ static RList *sections(RBinFile *bf) {
 	if (!(ptr = R_NEW0 (RBinSection))) {
 		return ret;
 	}
-	strcpy (ptr->name, "text");
+	ptr->name = strdup ("text");
 	ptr->paddr = ptr->vaddr = 0x100 + sizeof (SMD_Header);
 	{
 		SMD_Header hdr = {{0}};
@@ -284,7 +288,7 @@ static RList *sections(RBinFile *bf) {
 		ut64 baddr = r_read_be32 (&hdr.RomStart);
 		ptr->vaddr += baddr;
 	}
-	ptr->size = ptr->vsize = bf->buf->length - ptr->paddr;
+	ptr->size = ptr->vsize = r_buf_size (bf->buf) - ptr->paddr;
 	ptr->perm = R_PERM_RX;
 	ptr->add = true;
 	r_list_append (ret, ptr);
@@ -300,14 +304,16 @@ static RList *entries(RBinFile *bf) { // Should be 3 offsets pointed by NMI, RES
 	if (!(ptr = R_NEW0 (RBinAddr))) {
 		return ret;
 	}
-#if 0
-	SMD_Header hdr = {{0}};
-	r_buf_read_at (bf->buf, 0, (ut8*)&hdr, sizeof (hdr));
-	ut64 baddr = 0; // r_read_be32 (&hdr.RomStart);
-	ptr->paddr = ptr->vaddr = baddr + 0x100 + sizeof (SMD_Header);
-#endif
-	ptr->paddr = ptr->vaddr = 0x100 + sizeof (SMD_Header);
-	r_list_append (ret, ptr);
+	if (bf->size < sizeof (SMD_Vectors)) {
+		eprintf ("ERR: binfile too small!\n");
+		ptr->paddr = ptr->vaddr = 0x100 + sizeof (SMD_Header);
+		r_list_append (ret, ptr);
+	} else {
+		SMD_Vectors vectors;
+		r_buf_read_at (bf->buf, 0, (ut8*)&vectors, sizeof (vectors));
+		ptr->paddr = ptr->vaddr = r_read_be32 (&vectors.Reset);
+		r_list_append (ret, ptr);
+	}
 	return ret;
 }
 
@@ -315,8 +321,8 @@ RBinPlugin r_bin_plugin_smd = {
 	.name = "smd",
 	.desc = "SEGA Genesis/Megadrive",
 	.license = "LGPL3",
-	.load_bytes = &load_bytes,
-	.check_bytes = &check_bytes,
+	.load_buffer = &load_buffer,
+	.check_buffer = &check_buffer,
 	.baddr = &baddr,
 	.entries = &entries,
 	.sections = &sections,

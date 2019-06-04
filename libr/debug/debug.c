@@ -575,7 +575,7 @@ R_API bool r_debug_select(RDebug *dbg, int pid, int tid) {
 		tid = pid;
 	}
 	if (pid != -1 && tid != -1) {
-		if (pid != dbg->pid || tid != dbg->tid) {
+		if ((pid != dbg->pid || tid != dbg->tid) && dbg->verbose) {
 			eprintf ("= attach %d %d\n", pid, tid);
 		}
 	} else {
@@ -811,8 +811,7 @@ R_API int r_debug_step_soft(RDebug *dbg) {
 		} else {
 			r = 0;
 		}
-		if (!dbg->iob.read_at (dbg->iob.io,
-		      r*op.scale + op.disp, (ut8*)&memval, 8)) {
+		if (!dbg->iob.read_at (dbg->iob.io, r*op.scale + op.disp, (ut8*)&memval, 8)) {
 			next[0] = op.addr + op.size;
 		} else {
 			next[0] = (dbg->bits == R_SYS_BITS_32) ? memval.r32[0] : memval.r64;
@@ -953,7 +952,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 		}
 		// Analyze the opcode
 		if (!r_anal_op (dbg->anal, &op, pc, buf + (pc - buf_pc), sizeof (buf) - (pc - buf_pc), R_ANAL_OP_MASK_BASIC)) {
-			eprintf ("Decode error at %"PFMT64x"\n", pc);
+			eprintf ("debug-step-over: Decode error at %"PFMT64x"\n", pc);
 			return steps_taken;
 		}
 		if (op.fail == -1) {
@@ -986,7 +985,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 static ut64 get_prev_instr(RDebug *dbg, ut64 from, ut64 to) {
 	int i, ret, bsize = 256;
 	int inc;
-	ut64 prev, at;
+	ut64 prev = 0, at;
 	RAnalOp aop = {0};
 	const int mininstrsz = r_anal_archinfo (dbg->anal, R_ANAL_ARCHINFO_MIN_OP_SIZE);
 	const int minopcode = R_MAX (1, mininstrsz);
@@ -1237,7 +1236,7 @@ R_API int r_debug_continue(RDebug *dbg) {
 	return r_debug_continue_kill (dbg, 0); //dbg->reason.signum);
 }
 
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 R_API int r_debug_continue_pass_exception(RDebug *dbg) {
 	return r_debug_continue_kill (dbg, DBG_EXCEPTION_NOT_HANDLED);
 }
@@ -1346,10 +1345,8 @@ R_API int r_debug_continue_until_nonblock(RDebug *dbg, ut64 addr) {
 }
 
 R_API bool r_debug_continue_back(RDebug *dbg) {
-	RDebugSession *before;
 	RBreakpointItem *prev = NULL;
-	int has_bp;
-	ut64 pc, end_addr;
+	ut64 pc;
 	if (!dbg) {
 		return false;
 	}
@@ -1363,14 +1360,16 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 		return false;
 	}
 
-	/* Get previous state */
-	RListIter *iter = r_list_head (dbg->sessions);
-	before = iter? iter->data: NULL; //XXX: currently use first session.
-	if (!iter || !before) {
+	if (!dbg->sessions) {
 		return false;
 	}
-
-	end_addr = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
+	/* Get previous state */
+	RListIter *iter = dbg->sessions->head;
+	if (!iter || !iter->data) {
+		return false;
+	}
+	RDebugSession *before = iter->data; //XXX: currently use first session.
+	ut64 end_addr = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
 	//eprintf ("before session (%d) 0x%08"PFMT64x"=> to 0x%08"PFMT64x"\n", before->key.id, before->key.addr, end_addr);
 
 	/* Rollback to previous state */
@@ -1378,7 +1377,7 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 
 	/* ### Get previous breakpoint ### */
 	// Firstly set the breakpoint at end address
-	has_bp = r_bp_get_in (dbg->bp, end_addr, R_BP_PROT_EXEC) != NULL;
+	bool has_bp = r_bp_get_in (dbg->bp, end_addr, R_BP_PROT_EXEC) != NULL;
 	if (!has_bp) {
 		r_bp_add_sw (dbg->bp, end_addr, dbg->bpsize, R_BP_PROT_EXEC);
 	}
@@ -1420,9 +1419,10 @@ R_API bool r_debug_continue_back(RDebug *dbg) {
 	}
 	return true;
 }
+
 static int show_syscall(RDebug *dbg, const char *sysreg) {
 	const char *sysname;
-	char regname[8];
+	char regname[32];
 	int reg, i, args;
 	RSyscallItem *si;
 	reg = (int)r_debug_reg_get (dbg, sysreg);

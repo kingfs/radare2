@@ -211,7 +211,6 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
 		ptable = realloc (table_ident, (i + TOK_ALLOC_INCR) * sizeof(TokenSym *));
 		table_ident = ptable;
 	}
-
 	ts = malloc (sizeof(TokenSym) + len);
 	table_ident[i] = ts;
 	ts->tok = tok_ident++;
@@ -361,7 +360,7 @@ addv:
 			return table_ident[v - TOK_IDENT]->str;
 		} else if (v >= SYM_FIRST_ANOM) {
 			/* special name for anonymous symbol */
-			sprintf (p, "L.%u", v - SYM_FIRST_ANOM);
+			sprintf (p, "%u", v - SYM_FIRST_ANOM);
 		} else {
 			/* should never happen */
 			return NULL;
@@ -932,18 +931,21 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
 	case TOK_LSTR:
 	{
 		int nb_words;
-		CString *cstr;
 
 		nb_words = (sizeof(CString) + cv->cstr->size + 3) >> 2;
-		while ((len + nb_words) > s->allocated_len)
+		while ((len + nb_words) > s->allocated_len) {
 			str = tok_str_realloc (s);
-		cstr = (CString *) (str + len);
-		cstr->data = NULL;
-		cstr->size = cv->cstr->size;
-		cstr->data_allocated = NULL;
-		cstr->size_allocated = cstr->size;
-		memcpy ((char *) cstr + sizeof(CString),
-			cv->cstr->data, cstr->size);
+		}
+		CString cstr = {0};
+		cstr.data = NULL;
+		cstr.size = cv->cstr->size;
+		cstr.data_allocated = NULL;
+		cstr.size_allocated = cstr.size;
+
+		ut8 *p = (ut8*)(str + len);
+		memcpy (p, &cstr, sizeof (CString));
+		memcpy (p + sizeof (CString),
+			cv->cstr->data, cstr.size);
 		len += nb_words;
 	}
 	break;
@@ -1073,7 +1075,9 @@ ST_INLN void define_push(int v, int macro_type, int *str, Sym *first_arg)
 	}
 	s->d = str;
 	s->next = first_arg;
-	table_ident[v - TOK_IDENT]->sym_define = s;
+	if (v >= TOK_IDENT) {
+		table_ident[v - TOK_IDENT]->sym_define = s;
+	}
 }
 
 /* undefined a define symbol. Its name is just set to zero */
@@ -1596,9 +1600,11 @@ include_trynext:
 			memcpy (filepath, file->filename, filepath_len);
 			strcpy (filepath + filepath_len, buf);
 			if (tcc_open (s1, filepath) < 0) {
-				snprintf (filepath, sizeof (filepath),
-					"/usr/include/%s", buf);
-				if (tcc_open (s1, filepath) < 0) {
+				if (!dirname) {
+					dirname = "/usr/include";
+				}
+				int len = snprintf (filepath, sizeof (filepath), "%s/%s", dirname, buf);
+				if (len >= sizeof (filepath) || tcc_open (s1, filepath) < 0) {
 					tcc_error ("include file '%s' not found", filepath);
 				} else {
 					fprintf (stderr, "#include \"%s\"\n", filepath);
@@ -2909,7 +2915,7 @@ redo:
 				/* NOTE: non zero sa->t indicates VA_ARGS */
 				while ((parlevel > 0 ||
 					(tok != ')' &&
-					 (tok != ',' || sa->type.t))) &&
+					 (tok != ',' || (sa && sa->type.t)))) &&
 				       tok != -1) {
 					if (tok == '(') {
 						parlevel++;
@@ -2926,7 +2932,7 @@ redo:
 				}
 				str.len -= spc;
 				tok_str_add (&str, 0);
-				sa1 = sym_push2 (&args, sa->v & ~SYM_FIELD, sa->type.t, 0);
+				sa1 = sa ? sym_push2 (&args, sa->v & ~SYM_FIELD, sa->type.t, 0) : NULL;
 				if (!sa1) {
 					return -1;
 				}

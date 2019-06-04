@@ -1,8 +1,9 @@
-files = [
+r_anal_sources = [
   'anal.c',
   'anal_ex.c',
   'bb.c',
   'cc.c',
+  'class.c',
   'cond.c',
   'cycles.c',
   'data.c',
@@ -28,11 +29,13 @@ files = [
   'sign.c',
   'state.c',
   'switch.c',
+  'type.c',
   'value.c',
   'var.c',
   'vtable.c',
   'xrefs.c',
   'p/anal_6502.c',
+  'p/anal_6502_cs.c',
   'p/anal_8051.c',
   'p/anal_arc.c',
   'p/anal_arm_cs.c',
@@ -51,6 +54,7 @@ files = [
   'p/anal_i8080.c',
   'p/anal_java.c',
   'p/anal_m68k_cs.c',
+  'p/anal_m680x_cs.c',
   'p/anal_malbolge.c',
   'p/anal_mcore.c',
   'p/anal_mips_cs.c',
@@ -120,17 +124,20 @@ r_anal_inc = [
   )
 ]
 
-r_anal = library('r_anal', files,
+r_anal = library('r_anal', r_anal_sources,
   include_directories: r_anal_inc,
   c_args: library_cflags,
   dependencies: [
     r_util_dep,
     r_reg_dep,
     r_asm_dep,
+    r_crypto_dep,
     r_search_dep,
     r_cons_dep,
+    r_parse_dep,
     r_syscall_dep,
     r_flag_dep,
+    r_hash_dep,
     sdb_dep,
     java_dep,
     capstone_dep
@@ -143,8 +150,7 @@ r_anal = library('r_anal', files,
 r_anal_dep = declare_dependency(link_with: r_anal,
                                 include_directories: r_anal_inc)
 
-pkgconfig_mod.generate(
-  libraries: [r_anal],
+pkgconfig_mod.generate(r_anal,
   subdirs: 'libr',
   version: r2_version,
   name: 'r_anal',
@@ -153,6 +159,8 @@ pkgconfig_mod.generate(
     'r_util',
     'r_reg',
     'r_asm',
+    'r_crypto',
+    'r_parse',
     'r_syscall',
     'r_search',
     'r_cons',

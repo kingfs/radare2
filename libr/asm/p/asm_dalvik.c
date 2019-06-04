@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2009-2018 - earada, pancake, h4ng3r */
+/* radare - LGPL - Copyright 2009-2019 - earada, pancake, h4ng3r */
 
 #include <stdio.h>
 #include <string.h>
@@ -10,12 +10,11 @@
 #include <dalvik/opcode.h>
 
 static int dalvik_disassemble (RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
-	if (!a || !op || !buf || len < 1) {
-		return -1;
-	}
+	r_return_val_if_fail  (a && op && buf && len > 0, -1);
+
 	int vA, vB, vC, vD, vE, vF, vG, vH, payload = 0, i = (int) buf[0];
 	int size = dalvik_opcodes[i].len;
-	char str[1024], *strasm;
+	char str[1024], *strasm = NULL;
 	ut64 offset;
 	const char *flag_str;
 	a->dataalign = 2;
@@ -138,12 +137,10 @@ static int dalvik_disassemble (RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			break;
 		case fmtopvAAcBBBBBBBBBBBBBBBB:
 			vA = (int) buf[1];
-			#define llint long long int
-			llint lB = (llint)buf[2] | ((llint)buf[3] << 8)|
-				((llint)buf[4] << 16) | ((llint)buf[5] << 24)|
-				((llint)buf[6] << 32) | ((llint)buf[7] << 40)|
-				((llint)buf[8] << 48) | ((llint)buf[9] << 56);
-			#undef llint
+			ut64 lB = (ut64)buf[2] | ((ut64)buf[3] << 8)|
+				((ut64)buf[4] << 16) | ((ut64)buf[5] << 24)|
+				((ut64)buf[6] << 32) | ((ut64)buf[7] << 40)|
+				((ut64)(buf[8]&0xff) << 48) | ((ut64)(buf[9]&0xff) << 56);
 			snprintf (str, sizeof (str), " v%i:v%i, 0x%"PFMT64x, vA, vA + 1, lB);
 			strasm = r_str_append (strasm, str);
 			break;
@@ -344,8 +341,7 @@ static int dalvik_disassemble (RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			offset = R_ASM_GET_OFFSET (a, 's', vB);
 			if (offset == -1) {
 				snprintf (str, sizeof (str), " v%i, string+%i", vA, vB);
-			}
-			else {
+			} else {
 				snprintf (str, sizeof (str), " v%i, 0x%"PFMT64x, vA, offset);
 			}
 			strasm = r_str_append (strasm, str);
@@ -443,39 +439,40 @@ static int dalvik_disassemble (RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 			vH = (buf[7] << 8) | buf[6];
 
 			switch (vA) {
-				case 1:
-					snprintf (str, sizeof (str), " {v%d}", vC);
-					break;
-				case 2:
-					snprintf (str, sizeof (str), " {v%d, v%d}", vC, vD);
-					break;
-				case 3:
-					snprintf (str, sizeof (str), " {v%d, v%d, v%d}", vC, vD, vE);
-					break;
-				case 4:
-					snprintf (str, sizeof (str), " {v%d, v%d, v%d, v%d}", vC, vD, vE, vF);
-					break;
-				case 5:
-					snprintf (str, sizeof (str), " {v%d, v%d, v%d, v%d, v%d}", vC, vD, vE, vF, vG);
-					break;
+			case 1:
+				snprintf (str, sizeof (str), " {v%d}", vC);
+				break;
+			case 2:
+				snprintf (str, sizeof (str), " {v%d, v%d}", vC, vD);
+				break;
+			case 3:
+				snprintf (str, sizeof (str), " {v%d, v%d, v%d}", vC, vD, vE);
+				break;
+			case 4:
+				snprintf (str, sizeof (str), " {v%d, v%d, v%d, v%d}", vC, vD, vE, vF);
+				break;
+			case 5:
+				snprintf (str, sizeof (str), " {v%d, v%d, v%d, v%d, v%d}", vC, vD, vE, vF, vG);
+				break;
+			default:
+				snprintf (str, sizeof (str), " %d", vC);
+				break;
 			}
 			strasm = r_str_append (strasm, str);
 
 			flag_str = R_ASM_GET_NAME (a, 'm', vB);
 			if (flag_str) {
-				snprintf (str, sizeof (str), ", %s", flag_str);
+				strasm = r_str_appendf (strasm, ", %s", flag_str);
 			} else {
-				snprintf (str, sizeof (str), ", method+%i", vB);
+				strasm = r_str_appendf (strasm, ", method+%i", vB);
 			}
-			strasm = r_str_append (strasm, str);
 
 			flag_str = R_ASM_GET_NAME (a, 'p', vH);
 			if (flag_str) {
-				snprintf (str, sizeof (str), ", %s", flag_str);
+				strasm = r_str_appendf (strasm, ", %s", flag_str);
 			} else {
-				snprintf (str, sizeof (str), ", proto+%i", vH);
+				strasm = r_str_appendf (strasm, ", proto+%i", vH);
 			}
-			strasm = r_str_append (strasm, str);
 			break;
 		case fmtop4RCC:
 			vA = (int) buf[1];
@@ -512,10 +509,22 @@ static int dalvik_disassemble (RAsm *a, RAsmOp *op, const ut8 *buf, int len) {
 		op->size = len;
 		size = len;
 	}
-	op->payload = payload;
-	size += payload; // XXX
-	// align to 2
-	op->size = size;
+
+	if (payload < 0) {
+		op->payload = 0;
+	} else if (len > 0 && payload >= len) {
+		op->payload = len;
+	} else {
+		op->payload = payload;
+	}
+
+	if (size + op->payload < 0) {
+		op->size = 0;
+	} else if (size + op->payload >= len) {
+		op->size = len;
+	} else {
+		op->size = size + op->payload;
+	}
 	free (strasm);
 	return size;
 }

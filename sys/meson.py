@@ -165,6 +165,12 @@ def win_dist(args):
 
     makedirs(r'{DIST}')
     copy(r'{BUILDDIR}\binr\*\*.exe', r'{DIST}')
+
+    r2_bat_fname = args.install + r'\r2.bat'
+    log.debug('create "%s"', r2_bat_fname)
+    with open(r2_bat_fname, 'w') as r2_bat:
+        r2_bat.write('@"%s\\radare2" %%*\n' % os.path.abspath(args.install))
+
     copy(r'{BUILDDIR}\libr\*\*.dll', r'{DIST}')
     makedirs(r'{DIST}\{R2_LIBDIR}')
     if args.shared:
@@ -187,12 +193,13 @@ def win_dist_libr2(**path_fmt):
     copy(r'{BUILDDIR}\libr\asm\d\*.sdb', r'{DIST}\{R2_SDB}\opcodes')
     makedirs(r'{DIST}\{R2_INCDIR}\sdb')
     makedirs(r'{DIST}\{R2_INCDIR}\r_util')
+    makedirs(r'{DIST}\{R2_INCDIR}\r_crypto')
     copy(r'{ROOT}\libr\include\*.h', r'{DIST}\{R2_INCDIR}')
     copy(r'{BUILDDIR}\r_version.h', r'{DIST}\{R2_INCDIR}')
     copy(r'{BUILDDIR}\r_userconf.h', r'{DIST}\{R2_INCDIR}')
     copy(r'{ROOT}\libr\include\sdb\*.h', r'{DIST}\{R2_INCDIR}\sdb')
     copy(r'{ROOT}\libr\include\r_util\*.h', r'{DIST}\{R2_INCDIR}\r_util')
-    copytree(r'{ROOT}\libr\include\msvc', r'{DIST}\{R2_INCDIR}\msvc')
+    copy(r'{ROOT}\libr\include\r_crypto\*.h', r'{DIST}\{R2_INCDIR}\r_crypto')
     makedirs(r'{DIST}\{R2_FORTUNES}')
     copy(r'{ROOT}\doc\fortunes.*', r'{DIST}\{R2_FORTUNES}')
     copytree(r'{ROOT}\libr\bin\d', r'{DIST}\{R2_SDB}\format',

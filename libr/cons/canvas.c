@@ -102,6 +102,7 @@ static void stamp_attr(RConsCanvas *c, int loc, int length) {
 	s = attr_at (c, loc);
 
 	if (s) {
+#if 0
 		if (*s != 0 && strlen (*s) > 2 && *(*s + 2) == '0') {
 			if (strlen (c->attr) == 5 && *(c->attr + 2) != '0') {
 				char tmp[9];
@@ -112,6 +113,7 @@ static void stamp_attr(RConsCanvas *c, int loc, int length) {
 				c->attr = r_str_const (tmp);
 			}
 		}
+#endif
 		*s = c->attr;
 	} else {
 		for (i = c->attrslen; i > 0 && loc < c->attrs[i - 1].loc; i--) {
@@ -146,13 +148,14 @@ static const char *set_attr(RConsCanvas *c, const char *s) {
 	}
 
 	if (p != s) {
-		char tmp[256];
-		const int slen = R_MIN (p - s, sizeof (tmp) - 1);
+		RStrBuf *tmp = r_strbuf_new (NULL);
+		if (!tmp) {
+			return NULL;
+		}
+		const int slen = p - s;
 		if (slen > 0) {
-			memcpy (tmp, s, slen);
-			tmp[slen] = 0;
-			// could be faster
-			c->attr = r_str_const (tmp);
+			r_strbuf_append_n (tmp, s, slen);
+			c->attr = r_str_const (r_strbuf_drain (tmp));
 		}
 	}
 	return p;
@@ -395,7 +398,6 @@ R_API void r_cons_canvas_write(RConsCanvas *c, const char *s) {
 
 R_API char *r_cons_canvas_to_string(RConsCanvas *c) {
 	int x, y, olen = 0, attr_x = 0;
-	char *o;
 	const char **atr;
 	int is_first = true;
 
@@ -406,8 +408,12 @@ R_API char *r_cons_canvas_to_string(RConsCanvas *c) {
 	for (y = 0; y < c->h; y++) {
 		olen += c->blen[y] + 1;
 	}
-	o = calloc (1, olen * CONS_MAX_ATTR_SZ);
+	char *o = calloc (1, olen * 2 * CONS_MAX_ATTR_SZ);
 	if (!o) {
+		return NULL;
+	}
+	if (!olen) {
+		free (o);
 		return NULL;
 	}
 
@@ -533,7 +539,9 @@ R_API int r_cons_canvas_resize(RConsCanvas *c, int w, int h) {
 
 R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const char *color) {
 	const char *hline = useUtf8? RUNECODESTR_LINE_HORIZ : "-";
-	const char *vline = useUtf8? RUNECODESTR_LINE_VERT : "|";
+	const char *vtmp = useUtf8? RUNECODESTR_LINE_VERT : "|";
+	RStrBuf *vline = r_strbuf_new (NULL);
+	r_strbuf_appendf (vline, Color_RESET"%s%s", color, vtmp);
 	const char *tl_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_TL : RUNECODESTR_CORNER_TL) : ".";
 	const char *tr_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_TR : RUNECODESTR_CORNER_TR) : ".";
 	const char *bl_corner = useUtf8 ? (useUtf8Curvy ? RUNECODESTR_CURVE_CORNER_BL : RUNECODESTR_CORNER_BL) : "`";
@@ -580,13 +588,14 @@ R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const c
 	}
 	for (i = 1; i < h - 1; i++) {
 		if (G (x, y + i)) {
-			W (vline);
+			W (r_strbuf_get (vline));
 		}
 		if (G (x + w - 1, y + i)) {
-			W (vline);
+			W (r_strbuf_get (vline));
 		}
 	}
 	free (row);
+	r_strbuf_free (vline);
 	if (color) {
 		c->attr = Color_RESET;
 	}

@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2008-2018 - condret, pancake, alvaro_fe */
+/* radare2 - LGPL - Copyright 2008-2019 - condret, pancake, alvaro_fe */
 
 #include <r_io.h>
 #include <sdb.h>
@@ -100,62 +100,39 @@ R_API RIO* r_io_new() {
 }
 
 R_API RIO* r_io_init(RIO* io) {
-	if (!io) {
-		return NULL;
-	}
+	r_return_val_if_fail (io, NULL);
 	io->addrbytes = 1;
 	r_io_desc_init (io);
 	r_pvector_init (&io->map_skyline, free);
+	r_pvector_init (&io->map_skyline_shadow, free);
 	r_io_map_init (io);
-	r_io_section_init (io);
 	r_io_cache_init (io);
 	r_io_plugin_init (io);
 	r_io_undo_init (io);
 	return io;
 }
 
-R_API RBuffer *r_io_read_buf(RIO *io, ut64 addr, int len) {
-	RBuffer *b = R_NEW0 (RBuffer);
-	if (!b) {
-		return NULL;
-	}
-	b->buf = malloc (len);
-	if (!b->buf) {
-		free (b);
-		return NULL;
-	}
-	len = r_io_read_at (io, addr, b->buf, len);
-	b->length = (len < 0)? 0: len;
-	return b;
-}
-
-R_API int r_io_write_buf(RIO *io, struct r_buf_t *b) {
-	return r_io_write_at (io, b->base, b->buf, b->length);
-}
-
 R_API void r_io_free(RIO *io) {
-	if (!io) {
-		return;
+	if (io) {
+		r_io_fini (io);
+		r_cache_free (io->buffer);
+		free (io);
 	}
-	r_io_fini (io);
-	r_cache_free (io->buffer);
-	free (io);
 }
 
 R_API RIODesc *r_io_open_buffer(RIO *io, RBuffer *b, int perm, int mode) {
-	const int bufSize = r_buf_size (b);
+	ut64 bufSize = r_buf_size (b);
 	char *uri = r_str_newf ("malloc://%d", bufSize);
 	RIODesc *desc = r_io_open_nomap (io, uri, perm, mode);
 	if (desc) {
-		r_io_desc_write (desc, r_buf_get_at (b, 0, NULL), bufSize);
+		const ut8 *tmp = r_buf_data (b, &bufSize);
+		r_io_desc_write (desc, tmp, bufSize);
 	}
 	return desc;
 }
 
 R_API RIODesc *r_io_open_nomap(RIO *io, const char *uri, int perm, int mode) {
-	if (!io || !uri) {
-		return NULL;
-	}
+	r_return_val_if_fail (io && uri, NULL);
 	RIODesc *desc = r_io_desc_open (io, uri, perm, mode);
 	if ((io->autofd || !io->desc) && desc) {
 		io->desc = desc;
@@ -166,29 +143,23 @@ R_API RIODesc *r_io_open_nomap(RIO *io, const char *uri, int perm, int mode) {
 
 /* opens a file and maps it to 0x0 */
 R_API RIODesc* r_io_open(RIO* io, const char* uri, int perm, int mode) {
-	if (!io || !io->maps) {
-		return NULL;
-	}
+	r_return_val_if_fail (io && io->maps, NULL);
 	RIODesc* desc = r_io_open_nomap (io, uri, perm, mode);
-	if (!desc) {
-		return NULL;
+	if (desc) {
+		r_io_map_new (io, desc->fd, desc->perm, 0LL, 0LL, r_io_desc_size (desc));
 	}
-	r_io_map_new (io, desc->fd, desc->perm, 0LL, 0LL, r_io_desc_size (desc));
 	return desc;
 }
 
 /* opens a file and maps it to an offset specified by the "at"-parameter */
 R_API RIODesc* r_io_open_at(RIO* io, const char* uri, int perm, int mode, ut64 at) {
-	RIODesc* desc;
-	ut64 size;
-	if (!io || !io->maps) {
-		return NULL;
-	}
-	desc = r_io_open_nomap (io, uri, perm, mode);
+	r_return_val_if_fail (io && io->maps && uri, NULL);
+
+	RIODesc* desc = r_io_open_nomap (io, uri, perm, mode);
 	if (!desc) {
 		return NULL;
 	}
-	size = r_io_desc_size (desc);
+	ut64 size = r_io_desc_size (desc);
 	// second map
 	if (size && ((UT64_MAX - size + 1) < at)) {
 		// split map into 2 maps if only 1 big map results into interger overflow
@@ -206,9 +177,7 @@ R_API RList* r_io_open_many(RIO* io, const char* uri, int perm, int mode) {
 	RList* desc_list;
 	RListIter* iter;
 	RIODesc* desc;
-	if (!io || !io->files || !uri) {
-		return NULL;
-	}
+	r_return_val_if_fail (io && io->files && uri, NULL);
 	RIOPlugin* plugin = r_io_plugin_resolve (io, uri, 1);
 	if (!plugin || !plugin->open_many || !plugin->close) {
 		return NULL;
@@ -266,20 +235,16 @@ R_API int r_io_close_all(RIO* io) { // what about undo?
 	}
 	r_io_desc_fini (io);
 	r_io_map_fini (io);
-	r_io_section_fini (io);
 	ls_free (io->plugins);
 	r_io_desc_init (io);
 	r_io_map_init (io);
-	r_io_section_init (io);
 	r_io_cache_fini (io);
 	r_io_plugin_init (io);
 	return true;
 }
 
 R_API int r_io_pread_at(RIO* io, ut64 paddr, ut8* buf, int len) {
-	if (!io || !buf || len < 1) {
-		return 0;
-	}
+	r_return_val_if_fail (io && buf && len >= 0, -1);
 	if (io->ff) {
 		memset (buf, io->Oxff, len);
 	}
@@ -287,33 +252,20 @@ R_API int r_io_pread_at(RIO* io, ut64 paddr, ut8* buf, int len) {
 }
 
 R_API int r_io_pwrite_at(RIO* io, ut64 paddr, const ut8* buf, int len) {
-	if (!io) {
-		return 0;
-	}
+	r_return_val_if_fail (io && buf && len > 0, -1);
 	return r_io_desc_write_at (io->desc, paddr, buf, len);
 }
 
 // Returns true iff all reads on mapped regions are successful and complete.
 R_API bool r_io_vread_at_mapped(RIO* io, ut64 vaddr, ut8* buf, int len) {
-	if (!io || !buf || (len < 1)) {
-		return false;
-	}
+	r_return_val_if_fail (io && buf && len > 0, false);
 	if (io->ff) {
 		memset (buf, io->Oxff, len);
-	}
-	if (!io->maps) {
-		return false;
 	}
 	return on_map_skyline (io, vaddr, buf, len, R_PERM_R, fd_read_at_wrap, false);
 }
 
 static bool r_io_vwrite_at(RIO* io, ut64 vaddr, const ut8* buf, int len) {
-	if (!io || !buf || (len < 1)) {
-		return false;
-	}
-	if (!io->maps) {
-		return false;
-	}
 	return on_map_skyline (io, vaddr, (ut8*)buf, len, R_PERM_W, fd_write_at_wrap, false);
 }
 
@@ -323,15 +275,13 @@ static bool r_io_vwrite_at(RIO* io, ut64 vaddr, const ut8* buf, int len) {
 // For physical mode, the interface is broken because the actual read bytes are
 // not available. This requires fixes in all call sites.
 R_API bool r_io_read_at(RIO *io, ut64 addr, ut8 *buf, int len) {
-	bool ret;
-	if (!io || !buf || len < 1) {
+	r_return_val_if_fail (io && buf && len >= 0, false);
+	if (len == 0) {
 		return false;
 	}
-	if (io->va) {
-		ret = r_io_vread_at_mapped (io, addr, buf, len);
-	} else {
-		ret = r_io_pread_at (io, addr, buf, len) > 0;
-	}
+	bool ret = (io->va)
+		? r_io_vread_at_mapped (io, addr, buf, len)
+		: r_io_pread_at (io, addr, buf, len) > 0;
 	if (io->cached & R_PERM_R) {
 		(void)r_io_cache_read (io, addr, buf, len);
 	}
@@ -344,9 +294,7 @@ R_API bool r_io_read_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 // of read bytes.
 R_API bool r_io_read_at_mapped(RIO *io, ut64 addr, ut8 *buf, int len) {
 	bool ret;
-	if (!io || !buf) {
-		return false;
-	}
+	r_return_val_if_fail (io && buf, false);
 	if (io->ff) {
 		memset (buf, io->Oxff, len);
 	}
@@ -366,8 +314,9 @@ R_API bool r_io_read_at_mapped(RIO *io, ut64 addr, ut8 *buf, int len) {
 // Returns -1 on error.
 R_API int r_io_nread_at(RIO *io, ut64 addr, ut8 *buf, int len) {
 	int ret;
-	if (!io || !buf) {
-		return -1;
+	r_return_val_if_fail (io && buf && len >= 0, -1);
+	if (len == 0) {
+		return 0;
 	}
 	if (io->va) {
 		if (io->ff) {
@@ -387,9 +336,7 @@ R_API bool r_io_write_at(RIO* io, ut64 addr, const ut8* buf, int len) {
 	int i;
 	bool ret = false;
 	ut8 *mybuf = (ut8*)buf;
-	if (!io || !buf || len < 1) {
-		return false;
-	}
+	r_return_val_if_fail (io && buf && len > 0, false);
 	if (io->write_mask) {
 		mybuf = r_mem_dup ((void*)buf, len);
 		for (i = 0; i < len; i++) {
@@ -529,15 +476,33 @@ R_API bool r_io_set_write_mask(RIO* io, const ut8* mask, int len) {
 	return true;
 }
 
-R_API int r_io_bind(RIO* io, RIOBind* bnd) {
-	if (!io || !bnd) {
-		return false;
+R_API ut64 r_io_p2v(RIO *io, ut64 pa) {
+	RIOMap *map = r_io_map_get_paddr (io, pa);
+	if (map) {
+		return pa - map->delta + map->itv.addr;
 	}
+	return UT64_MAX;
+}
+
+R_API ut64 r_io_v2p(RIO *io, ut64 va) {
+	RIOMap *map = r_io_map_get (io, va);
+	if (map) {
+		st64 delta = va - map->itv.addr;
+		return map->itv.addr + map->delta + delta;
+	}
+	return UT64_MAX;
+}
+
+R_API void r_io_bind(RIO *io, RIOBind *bnd) {
+	r_return_if_fail (io && bnd);
+
 	bnd->io = io;
 	bnd->init = true;
 	bnd->desc_use = r_io_use_fd;
 	bnd->desc_get = r_io_desc_get;
 	bnd->desc_size = r_io_desc_size;
+	bnd->p2v = r_io_p2v;
+	bnd->v2p = r_io_v2p;
 	bnd->open = r_io_open_nomap;
 	bnd->open_at = r_io_open_at;
 	bnd->close = r_io_fd_close;
@@ -548,6 +513,7 @@ R_API int r_io_bind(RIO* io, RIOBind* bnd) {
 	bnd->fd_close = r_io_fd_close;
 	bnd->fd_seek = r_io_fd_seek;
 	bnd->fd_size = r_io_fd_size;
+	bnd->fd_resize = r_io_fd_resize;
 	bnd->fd_read = r_io_fd_read;
 	bnd->fd_write = r_io_fd_write;
 	bnd->fd_read_at = r_io_fd_read_at;
@@ -557,11 +523,14 @@ R_API int r_io_bind(RIO* io, RIOBind* bnd) {
 	bnd->fd_get_map = r_io_map_get_for_fd;
 	bnd->fd_remap = r_io_map_remap_fd;
 	bnd->is_valid_offset = r_io_is_valid_offset;
+	bnd->map_get = r_io_map_get;
+	bnd->map_get_paddr = r_io_map_get_paddr;
 	bnd->addr_is_mapped = r_io_addr_is_mapped;
-	bnd->sections_vget = r_io_sections_vget;
-	bnd->section_add = r_io_section_add;
-	bnd->sect_vget = r_io_section_vget;
-	return true;
+	bnd->map_add = r_io_map_add;
+#if HAVE_PTRACE
+	bnd->ptrace = r_io_ptrace;
+	bnd->ptrace_func = r_io_ptrace_func;
+#endif
 }
 
 /* moves bytes up (+) or down (-) within the specified range */
@@ -620,6 +589,69 @@ R_API ut64 r_io_seek(RIO* io, ut64 offset, int whence) {
 	return io->off;
 }
 
+#if HAVE_PTRACE
+
+#if USE_PTRACE_WRAP
+#include <ptrace_wrap.h>
+#include <errno.h>
+
+static ptrace_wrap_instance *io_ptrace_wrap_instance(RIO *io) {
+	if (!io->ptrace_wrap) {
+		io->ptrace_wrap = R_NEW (ptrace_wrap_instance);
+		if (!io->ptrace_wrap) {
+			return NULL;
+		}
+		if (ptrace_wrap_instance_start (io->ptrace_wrap) < 0) {
+			R_FREE (io->ptrace_wrap);
+			return NULL;
+		}
+	}
+	return io->ptrace_wrap;
+}
+#endif
+
+R_API long r_io_ptrace(RIO *io, r_ptrace_request_t request, pid_t pid, void *addr, r_ptrace_data_t data) {
+#if USE_PTRACE_WRAP
+	ptrace_wrap_instance *wrap = io_ptrace_wrap_instance (io);
+	if (!wrap) {
+		errno = 0;
+		return -1;
+	}
+	return ptrace_wrap (wrap, request, pid, addr, data);
+#else
+	return ptrace (request, pid, addr, data);
+#endif
+}
+
+R_API pid_t r_io_ptrace_fork(RIO *io, void (*child_callback)(void *), void *child_callback_user) {
+#if USE_PTRACE_WRAP
+	ptrace_wrap_instance *wrap = io_ptrace_wrap_instance (io);
+	if (!wrap) {
+		errno = 0;
+		return -1;
+	}
+	return ptrace_wrap_fork (wrap, child_callback, child_callback_user);
+#else
+	pid_t r = r_sys_fork ();
+	if (r == 0) {
+		child_callback (child_callback_user);
+	}
+	return r;
+#endif
+}
+
+R_API void *r_io_ptrace_func(RIO *io, void *(*func)(void *), void *user) {
+#if USE_PTRACE_WRAP
+	ptrace_wrap_instance *wrap = io_ptrace_wrap_instance (io);
+	if (wrap) {
+		return ptrace_wrap_func (wrap, func, user);
+	}
+#endif
+	return func (user);
+}
+#endif
+
+
 //remove all descs and maps
 R_API int r_io_fini(RIO* io) {
 	if (!io) {
@@ -628,12 +660,17 @@ R_API int r_io_fini(RIO* io) {
 	r_io_desc_cache_fini_all (io);
 	r_io_desc_fini (io);
 	r_io_map_fini (io);
-	r_io_section_fini (io);
 	ls_free (io->plugins);
 	r_list_free (io->cache);
 	r_list_free (io->undo.w_list);
 	if (io->runprofile) {
 		R_FREE (io->runprofile);
 	}
+#if R_IO_USE_PTRACE_WRAP
+	if (io->ptrace_wrap) {
+		ptrace_wrap_instance_stop (io->ptrace_wrap);
+		free (io->ptrace_wrap);
+	}
+#endif
 	return true;
 }

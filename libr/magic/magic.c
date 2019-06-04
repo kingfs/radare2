@@ -39,8 +39,6 @@
 #define MAXPATHLEN 255
 #endif
 
-R_LIB_VERSION (r_magic);
-
 #if USE_LIB_MAGIC
 #include <magic.h>
 #define RMagic void
@@ -96,16 +94,13 @@ R_API int r_magic_errno(RMagic* m) {
 
 #else
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
 #ifndef _MSC_VER
-#include <sys/param.h>	/* for MAXPATHLEN */
+#include <sys/param.h> /* for MAXPATHLEN */
 #endif
-#include <sys/stat.h>
 #include <r_magic.h>
+#include <sys/stat.h>
+
+R_LIB_VERSION (r_magic);
 
 #include "file.h"
 
@@ -113,10 +108,6 @@ R_API int r_magic_errno(RMagic* m) {
 #include <sys/mman.h>
 #endif
 #include <limits.h>	/* for PIPE_BUF */
-
-#ifdef HAVE_UNISTD_H
-#include <unistd.h>	/* for read() */
-#endif
 
 #if __UNIX__
 #include <netinet/in.h>		/* for byte swapping */

@@ -38,6 +38,8 @@ R_API void r_syscall_free(RSyscall *s) {
 		sdb_free (s->srdb);
 		sdb_free (s->db);
 		free (s->os);
+		free (s->cpu);
+		free (s->arch);
 		free (s);
 	}
 }
@@ -65,16 +67,52 @@ static Sdb *openDatabase(Sdb *db, const char *name) {
 	return db;
 }
 
+static inline bool syscall_reload_needed(RSyscall *s, const char *os, const char *arch, int bits) {
+	if (!s->os || strcmp (s->os, os)) {
+		return true;
+	}
+	if (!s->arch || strcmp (s->arch, arch)) {
+		return true;
+	}
+	return s->bits != bits;
+}
+
+static inline bool sysregs_reload_needed(RSyscall *s, const char *arch, int bits, const char *cpu) {
+	if (!s->arch || strcmp (s->arch, arch)) {
+		return true;
+	}
+	if (s->bits != bits) {
+		return true;
+	}
+	return !s->cpu || strcmp (s->cpu, cpu);
+}
+
 // TODO: should be renamed to r_syscall_use();
 R_API bool r_syscall_setup(RSyscall *s, const char *arch, int bits, const char *cpu, const char *os) {
+	bool syscall_changed, sysregs_changed;
+
 	if (!os || !*os) {
 		os = R_SYS_OS;
 	}
 	if (!arch) {
 		arch = R_SYS_ARCH;
 	}
+	if (!cpu) {
+		cpu = arch;
+	}
+	syscall_changed = syscall_reload_needed (s, os, arch, bits);
+	sysregs_changed = sysregs_reload_needed (s, arch, bits, cpu);
+
 	free (s->os);
 	s->os = strdup (os);
+
+	free (s->cpu);
+	s->cpu = strdup (cpu);
+
+	free (s->arch);
+	s->arch = strdup (arch);
+
+	s->bits = bits;
 
 	if (!strcmp (os, "any")) { // ignored
 		return true;
@@ -113,17 +151,24 @@ R_API bool r_syscall_setup(RSyscall *s, const char *arch, int bits, const char *
 		}
 	}
 
-	char *dbName = r_str_newf (R_JOIN_2_PATHS ("syscall", "%s-%s-%d"),
-		os, arch, bits);
-	s->db = openDatabase (s->db, dbName);
-	free (dbName);
+	if (syscall_changed) {
+		char *dbName = r_str_newf (R_JOIN_2_PATHS ("syscall", "%s-%s-%d"),
+			os, arch, bits);
+		if (dbName) {
+			s->db = openDatabase (s->db, dbName);
+			free (dbName);
+		}
+	}
 
-	dbName = r_str_newf (R_JOIN_2_PATHS ("sysregs", "%s-%d-%s"),
-		arch, bits, cpu ? cpu: arch);
-	sdb_free (s->srdb);
-	s->srdb = NULL;
-	s->srdb = openDatabase (s->srdb, dbName);
-	free (dbName);
+	if (sysregs_changed) {
+		char *dbName = r_str_newf (R_JOIN_2_PATHS ("sysregs", "%s-%d-%s"),
+			arch, bits, cpu);
+		if (dbName) {
+			sdb_free (s->srdb);
+			s->srdb = openDatabase (NULL, dbName);
+			free (dbName);
+		}
+	}
 	if (s->fd) {
 		fclose (s->fd);
 		s->fd = NULL;
@@ -153,15 +198,15 @@ R_API RSyscallItem *r_syscall_item_new_from_string(const char *name, const char 
 	si->swi = (int)r_num_get (NULL, r_str_word_get0 (o, 0));
 	si->num = (int)r_num_get (NULL, r_str_word_get0 (o, 1));
 	si->args = (int)r_num_get (NULL, r_str_word_get0 (o, 2));
-	//in a definition such as syscall=0x80,0,4,
-	//the string at index 3 is 0 causing oob read afterwards
 	si->sargs = calloc (si->args + 1, sizeof (char));
 	if (!si->sargs) {
 		free (si);
 		free (o);
 		return NULL;
 	}
-	strncpy (si->sargs, r_str_word_get0 (o, 3), si->args);
+	if (cols > 3) {
+		strncpy (si->sargs, r_str_word_get0 (o, 3), si->args);
+	}
 	free (o);
 	return si;
 }
@@ -239,6 +284,8 @@ static int callback_list(void *u, const char *k, const char *v) {
 		}
 		if (!strchr (si->name, '.')) {
 			r_list_append (list, si);
+		} else {
+			r_syscall_item_free (si);
 		}
 	}
 	return 1; // continue loop

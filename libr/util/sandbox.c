@@ -224,43 +224,70 @@ static char *expand_home(const char *p) {
 	return strdup (p);
 }
 
-R_API int r_sandbox_lseek (int fd, ut64 addr, int whence) {
+R_API int r_sandbox_lseek(int fd, ut64 addr, int whence) {
 	if (enabled) {
 		return -1;
 	}
 	return lseek (fd, (off_t)addr, whence);
 }
 
-R_API int r_sandbox_read (int fd, ut8* buf, int len) {
-	return enabled? -1 : read (fd, buf, len);
+R_API int r_sandbox_truncate(int fd, ut64 length) {
+	if (enabled) {
+		return -1;
+	}
+#ifdef _MSC_VER
+	return _chsize_s (fd, length);
+#else
+	return ftruncate (fd, (off_t)length);
+#endif
 }
 
-R_API int r_sandbox_write (int fd, const ut8* buf, int len) {
-	return enabled? -1 : write (fd, buf, len);
+R_API int r_sandbox_read(int fd, ut8 *buf, int len) {
+	return enabled? -1: read (fd, buf, len);
 }
 
-R_API int r_sandbox_close (int fd) {
-	return enabled? -1 : close (fd);
+R_API int r_sandbox_write(int fd, const ut8* buf, int len) {
+	return enabled? -1: write (fd, buf, len);
+}
+
+R_API int r_sandbox_close(int fd) {
+	return enabled? -1: close (fd);
 }
 
 /* perm <-> mode */
-R_API int r_sandbox_open (const char *path, int mode, int perm) {
+R_API int r_sandbox_open(const char *path, int mode, int perm) {
 	if (!path) {
 		return -1;
 	}
 	char *epath = expand_home (path);
+	int ret = -1;
 #if __WINDOWS__
 	mode |= O_BINARY;
+	if (!strcmp (path, "/dev/null")) {
+		path = "NUL";
+	}
 #endif
 	if (enabled) {
 		if ((mode & O_CREAT)
-		|| (mode & O_RDWR)
-		|| (!r_sandbox_check_path (epath))) {
+			|| (mode & O_RDWR)
+			|| (!r_sandbox_check_path (epath))) {
 			free (epath);
 			return -1;
 		}
 	}
-	int ret = open (epath, mode, perm);
+#if __WINDOWS__
+	{
+		wchar_t *wepath = r_utf8_to_utf16 (epath);
+		if (!wepath) {
+			free (epath);
+			return -1;
+		}
+		ret = _wopen (wepath, mode, perm);
+		free (wepath);
+	}
+#else // __WINDOWS__
+	ret = open (epath, mode, perm);
+#endif // __WINDOWS__
 	free (epath);
 	return ret;
 }
@@ -285,7 +312,24 @@ R_API FILE *r_sandbox_fopen (const char *path, const char *mode) {
 		epath = expand_home (path);
 	}
 	if ((strchr (mode, 'w') || r_file_is_regular (epath))) {
+#if __WINDOWS__
+		wchar_t *wepath = r_utf8_to_utf16 (epath);
+		if (!wepath) {
+			free (epath);
+			return ret;
+		}
+		wchar_t *wmode = r_utf8_to_utf16 (mode);
+		if (!wmode) {
+			free (wepath);
+			free (epath);
+			return ret;
+		}
+		ret = _wfopen (wepath, wmode);
+		free (wmode);
+		free (wepath);
+#else // __WINDOWS__
 		ret = fopen (epath, mode);
+#endif // __WINDOWS__
 	}
 	free (epath);
 	return ret;
@@ -315,7 +359,7 @@ R_API int r_sandbox_kill(int pid, int sig) {
 #endif
 	return -1;
 }
-#if __WINDOWS__ && !defined(__CYGWIN__)
+#if __WINDOWS__
 R_API HANDLE r_sandbox_opendir (const char *path, WIN32_FIND_DATAW *entry) {
 	wchar_t dir[MAX_PATH];
 	wchar_t *wcpath = 0;
@@ -330,11 +374,7 @@ R_API HANDLE r_sandbox_opendir (const char *path, WIN32_FIND_DATAW *entry) {
 	if (!(wcpath = r_utf8_to_utf16 (path))) {
 		return NULL;
 	}
-#if __MINGW32__
-	swprintf (dir, L"%ls\\*.*", wcpath);
-#else
 	swprintf (dir, MAX_PATH, L"%ls\\*.*", wcpath);
-#endif
 	free (wcpath);
 	return FindFirstFileW (dir, entry);
 }

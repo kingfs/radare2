@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2013-2018 - pancake */
+/* radare - LGPL - Copyright 2013-2019 - pancake */
 
 #include "r_types.h"
 #include "r_util.h"
@@ -13,7 +13,8 @@ R_API RStrBuf *r_strbuf_new(const char *str) {
 }
 
 R_API bool r_strbuf_equals(RStrBuf *sa, RStrBuf *sb) {
-	if (!sa || !sb || sa->len != sb->len) { // faster comparisons
+	r_return_val_if_fail (sa && sb, false);
+	if (sa->len != sb->len) {
 		return false;
 	}
 	return strcmp (r_strbuf_get (sa), r_strbuf_get (sb)) == 0;
@@ -40,15 +41,14 @@ R_API bool r_strbuf_setbin(RStrBuf *sb, const ut8 *s, int l) {
 			if (!ptr) {
 				return false;
 			}
-			if (sb->ptr) {
-				R_FREE (sb->ptr);
-			}
+			R_FREE (sb->ptr);
 			sb->ptrlen = l + 1;
 			sb->ptr = ptr;
 		}
 		memcpy (ptr, s, l);
 		*(ptr + l) = 0;
 	} else {
+		R_FREE (sb->ptr);
 		sb->ptr = NULL;
 		memcpy (sb->buf, s, l);
 		sb->buf[l] = 0;
@@ -108,14 +108,14 @@ done:
 	return ret;
 }
 
-R_API int r_strbuf_append(RStrBuf *sb, const char *s) {
+R_API bool r_strbuf_append(RStrBuf *sb, const char *s) {
 	r_return_val_if_fail (sb && s, false);
 
 	int l = strlen (s);
 	return r_strbuf_append_n (sb, s, l);
 }
 
-R_API int r_strbuf_append_n(RStrBuf *sb, const char *s, int l) {
+R_API bool r_strbuf_append_n(RStrBuf *sb, const char *s, int l) {
 	r_return_val_if_fail (sb, false);
 	r_return_val_if_fail (s && l >= 0, false);
 
@@ -149,26 +149,27 @@ R_API int r_strbuf_append_n(RStrBuf *sb, const char *s, int l) {
 			sb->ptr = p;
 			sb->ptrlen = newlen;
 		}
-		memcpy (p + sb->len, s, l);
-		*(p + sb->len + l) = 0;
+		if (p) {
+			memcpy (p + sb->len, s, l);
+			*(p + sb->len + l) = 0;
+		}
 	}
 	sb->len += l;
 	return true;
 }
 
-R_API int r_strbuf_appendf(RStrBuf *sb, const char *fmt, ...) {
-	int ret;
+R_API bool r_strbuf_appendf(RStrBuf *sb, const char *fmt, ...) {
 	va_list ap;
 
 	r_return_val_if_fail (sb && fmt, -1);
 
 	va_start (ap, fmt);
-	ret = r_strbuf_vappendf (sb, fmt, ap);
+	bool ret = r_strbuf_vappendf (sb, fmt, ap);
 	va_end (ap);
 	return ret;
 }
 
-R_API int r_strbuf_vappendf(RStrBuf *sb, const char *fmt, va_list ap) {
+R_API bool r_strbuf_vappendf(RStrBuf *sb, const char *fmt, va_list ap) {
 	int ret;
 	va_list ap2;
 	char string[1024];
@@ -211,7 +212,6 @@ R_API ut8 *r_strbuf_getbin(RStrBuf *sb, int *len) {
 
 R_API char *r_strbuf_drain(RStrBuf *sb) {
 	r_return_val_if_fail (sb, NULL);
-
 	char *ret = sb->ptr ? sb->ptr : strdup (sb->buf);
 	free (sb);
 	return ret;

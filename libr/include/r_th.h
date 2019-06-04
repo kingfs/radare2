@@ -18,6 +18,14 @@
 #define __GNU
 #include <semaphore.h>
 #include <pthread.h>
+#if __linux__ && __GLIBC_MINOR < 12
+#define HAVE_PTHREAD_NP 0
+#else
+#define HAVE_PTHREAD_NP 1
+#endif
+#if __FreeBSD__ || __OpenBSD__ || __DragonFly__
+#include <pthread_np.h>
+#endif
 #define R_TH_TID pthread_t
 #define R_TH_LOCK_T pthread_mutex_t
 #define R_TH_COND_T pthread_cond_t
@@ -79,6 +87,8 @@ R_API bool r_th_kill(RThread *th, bool force);
 R_API bool r_th_pause(RThread *th, bool enable);
 R_API bool r_th_try_pause(RThread *th);
 R_API R_TH_TID r_th_self(void);
+R_API bool r_th_setname(RThread *th, const char *name);
+R_API bool r_th_getname(RThread *th, char *name, size_t len);
 
 R_API RThreadSemaphore *r_th_sem_new(unsigned int initial);
 R_API void r_th_sem_free(RThreadSemaphore *sem);
@@ -92,7 +102,7 @@ R_API int r_th_lock_enter(RThreadLock *thl);
 R_API int r_th_lock_leave(RThreadLock *thl);
 R_API void *r_th_lock_free(RThreadLock *thl);
 
-R_API RThreadCond *r_th_cond_new();
+R_API RThreadCond *r_th_cond_new(void);
 R_API void r_th_cond_signal(RThreadCond *cond);
 R_API void r_th_cond_signal_all(RThreadCond *cond);
 R_API void r_th_cond_wait(RThreadCond *cond, RThreadLock *lock);

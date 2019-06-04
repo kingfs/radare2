@@ -1,4 +1,4 @@
-/* radare2 - LGPL - Copyright 2009-2018 - pancake */
+/* radare2 - LGPL - Copyright 2009-2019 - pancake */
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -53,15 +53,16 @@ static const char *help_msg_ec[] = {
 static const char *help_msg_eco[] = {
 	"Usage: eco[jc] [theme]", "", "load theme (cf. Path and dir.prefix)",
 	"eco", "", "list available themes",
+	"eco.", "", "display current theme name",
+	"ecoo", "", "reload current theme",
 	"ecoq", "", "list available themes without showing the current one",
 	"ecoj", "", "list available themes in JSON",
-	"ecoc", "", "display current theme name",
 	"Path:", "", "",
 	"$DATADIR/radare2/cons", "", R_JOIN_2_PATHS ("~", R2_HOME_THEMES) " ./",
 	NULL
 };
 
-static char *curtheme = NULL;
+static char *curtheme = "default";
 static bool getNext = false;
 
 static void cmd_eval_init(RCore *core) {
@@ -113,6 +114,47 @@ static bool nextpal_item(RCore *core, int mode, const char *file, int ctr) {
 	return true;
 }
 
+static bool cmd_load_theme(RCore *core, const char *_arg) {
+	bool failed = false;
+	char *path;
+	if (!_arg || !*_arg) {
+		return false;
+	}
+	if (!r_str_cmp (_arg, "default", strlen (_arg))) {
+		curtheme = strdup (_arg);
+		r_cons_pal_init (core->cons->context);
+		return true;
+	}
+	char *arg = strdup (_arg);
+
+	char *tmp = r_str_newf (R_JOIN_2_PATHS (R2_HOME_THEMES, "%s"), arg);
+	char *home = tmp ? r_str_home (tmp) : NULL;
+	free (tmp);
+
+	tmp = r_str_newf (R_JOIN_2_PATHS (R2_THEMES, "%s"), arg);
+	path = tmp ? r_str_r2_prefix (tmp) : NULL;
+	free (tmp);
+
+	if (!load_theme (core, home)) {
+		if (load_theme (core, path)) {
+			curtheme = r_str_dup (curtheme, arg);
+		} else {
+			if (load_theme (core, arg)) {
+				curtheme = r_str_dup (curtheme, arg);
+			} else {
+				char *absfile = r_file_abspath (arg);
+				eprintf ("eco: cannot open colorscheme profile (%s)\n", absfile);
+				free (absfile);
+				failed = true;
+			}
+		}
+	}
+	free (home);
+	free (path);
+	free (arg);
+	return !failed;
+}
+
 static void list_themes_in_path(RList *list, const char *path) {
 	RListIter *iter;
 	const char *fn;
@@ -132,7 +174,8 @@ R_API char *r_core_get_theme () {
 R_API RList *r_core_list_themes(RCore *core) {
 	RList *list = r_list_newf (free);
 	getNext = false;
-
+	char *tmp = strdup ("default");
+	r_list_append (list, tmp);
 	char *path = r_str_home (R2_HOME_THEMES R_SYS_DIR);
 	if (path) {
 		list_themes_in_path (list, path);
@@ -314,7 +357,7 @@ static int cmd_eval(void *data, const char *input) {
 	case 'c': // "ec"
 		switch (input[1]) {
 		case 'd': // "ecd"
-			r_cons_pal_init ();
+			r_cons_pal_init (core->cons->context);
 			break;
 		case '?':
 			r_core_cmd_help (core, help_msg_ec);
@@ -323,42 +366,13 @@ static int cmd_eval(void *data, const char *input) {
 			if (input[2] == 'j') {
 				nextpal (core, 'j');
 			} else if (input[2] == ' ') {
-				bool failed = false;
-				char *home, *path, *tmp;
-
-				tmp = r_str_newf (R_JOIN_2_PATHS (R2_HOME_THEMES, "%s"), input + 3);
-				home = tmp ? r_str_home (tmp) : NULL;
-				free (tmp);
-
-				tmp = r_str_newf (R_JOIN_2_PATHS (R2_THEMES, "%s"), input + 3);
-				path = tmp ? r_str_r2_prefix (tmp) : NULL;
-				free (tmp);
-
-				if (!load_theme (core, home)) {
-					if (load_theme (core, path)) {
-						//curtheme = r_str_dup (curtheme, path);
-						curtheme = r_str_dup (curtheme, input + 3);
-					} else {
-						if (load_theme (core, input + 3)) {
-							curtheme = r_str_dup (curtheme, input + 3);
-						} else {
-							char *absfile = r_file_abspath (input + 3);
-							eprintf ("eco: cannot open colorscheme profile (%s)\n", absfile);
-							free (absfile);
-							failed = true;
-						}
-					}
-				}
-				free (home);
-				free (path);
-				if (failed) {
-					eprintf ("Something went wrong\n");
-				}
-			} else if (input[2] == 'c') {
-				eprintf ("%s\n", r_core_get_theme ());
+				cmd_load_theme (core, input + 3);
+			} else if (input[2] == 'o') {
+				cmd_load_theme (core, r_core_get_theme ());
+			} else if (input[2] == 'c' || input[2] == '.') {
+				r_cons_printf ("%s\n", r_core_get_theme ());
 			} else if (input[2] == '?') {
 				r_core_cmd_help (core, help_msg_eco);
-				break;
 			} else if (input[2] == 'q') {
 				RList *themes_list = r_core_list_themes (core);
 				RListIter *th_iter;
@@ -372,9 +386,9 @@ static int cmd_eval(void *data, const char *input) {
 				const char *th;
 				r_list_foreach (themes_list, th_iter, th) {
 					if (curtheme && !strcmp (curtheme, th)) {
-						eprintf ("> %s\n", th);
+						r_cons_printf ("> %s\n", th);
 					} else {
-						eprintf ("  %s\n", th);
+						r_cons_printf ("  %s\n", th);
 					}
 				}
 			}
@@ -464,7 +478,7 @@ static int cmd_eval(void *data, const char *input) {
 				return true;
 			}
 			char *str = r_meta_get_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset);
-			char *dup = r_str_newf ("%s \"%s%s\"", str?str:"", word?word:"", color_code?color_code:r_cons_singleton ()->pal.wordhl);
+			char *dup = r_str_newf ("%s \"%s%s\"", str?str:"", word?word:"", color_code?color_code:r_cons_singleton ()->context->pal.wordhl);
 			r_meta_set_string (core->anal, R_META_TYPE_HIGHLIGHT, core->offset, dup);
 			r_str_argv_free (argv);
 			R_FREE (word);
@@ -506,7 +520,7 @@ static int cmd_eval(void *data, const char *input) {
 			free (file);
 		} else {
 			char *file = r_str_home (".radare2rc");
-			if (r_config_get_i (core->config, "scr.interactive")) {
+			if (r_cons_is_interactive ()) {
 				r_file_touch (file);
 				char * res = r_cons_editor (file, NULL);
 				if (res) {
@@ -523,22 +537,23 @@ static int cmd_eval(void *data, const char *input) {
 	case 'e': // "ee"
 		if (input[1] == ' ') {
 			char *p;
-			const char *val, *input2 = strchr (input+2, ' ');
-			if (input2) input2++; else input2 = input+2;
-			val = r_config_get (core->config, input2);
+			const char *input2 = strchr (input + 2, ' ');
+			input2 = (input2) ? input2 + 1 : input + 2;
+			const char *val = r_config_get (core->config, input2);
 			p = r_core_editor (core, NULL, val);
 			if (p) {
 				r_str_replace_char (p, '\n', ';');
 				r_config_set (core->config, input2, p);
 			}
 		} else {
-			eprintf ("Usage: ee varname\n");
+			eprintf ("Usage: ee varname # use $EDITOR to edit this config value\n");
 		}
 		break;
 	case '!': // "e!"
-		input = r_str_trim_ro (input+1);
-		if (!r_config_toggle (core->config, input))
+		input = r_str_trim_ro (input + 1);
+		if (!r_config_toggle (core->config, input)) {
 			eprintf ("r_config: '%s' is not a boolean variable.\n", input);
+		}
 		break;
 	case 's': // "es"
 		r_config_list (core->config, (input[1])? input + 1: NULL, 's');
@@ -552,16 +567,35 @@ static int cmd_eval(void *data, const char *input) {
 		break;
 	case 'r': // "er"
 		if (input[1]) {
-			const char *key = input+((input[1]==' ')?2:1);
+			const char *key = input + ((input[1] == ' ')? 2: 1);
 			if (!r_config_readonly (core->config, key)) {
 				eprintf ("cannot find key '%s'\n", key);
 			}
 		} else {
-			eprintf ("Usage: er [key]\n");
+			eprintf ("Usage: er [key]  # make an eval key PERMANENTLY read only\n");
 		}
 		break;
-	case ' ':
-		r_config_eval (core->config, input + 1);
+	case ' ': // "e "
+		if (r_str_endswith (input, ".")) {
+			r_config_list (core->config, input + 1, 0);
+		} else if (strchr (input + 1, ' ')) { // XXX we cant do "e cmd.gprompt=dr=", because the '=' is a token, and quotes dont affect him
+			r_config_eval (core->config, input + 1);
+		} else {
+			// simple get/set of config keys, assuming there are no spaces
+			char *k = strdup (input + 1);
+			char *v = strchr (k, '=');
+			if (v) {
+				*v++ = 0;
+				r_config_set (core->config, k, v);
+			} else {
+				k = r_str_trim (k);
+				const char *v = r_config_get (core->config, k);
+				if (v) {
+					r_cons_printf ("%s\n", v);
+				}
+			}
+			free (k);
+		}
 		break;
 	}
 	return 0;

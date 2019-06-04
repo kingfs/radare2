@@ -1,4 +1,4 @@
-/* radare - LGPL - Copyright 2007-2018 - pancake */
+/* radare - LGPL - Copyright 2007-2019 - pancake */
 /* dietline is a lightweight and portable library similar to GNU readline */
 
 #include <r_cons.h>
@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 #include <windows.h>
 #define USE_UTF8 0
 #else
@@ -170,7 +170,7 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 	} else {
 		return -1;
 	}
-	if (slen < len) {
+	if (len > slen) {
 		return -1;
 	}
 	for (i = 1; i < len; i++) {
@@ -186,28 +186,25 @@ static int r_line_readchar_utf8(ut8 *s, int slen) {
 }
 #endif
 
-#if __WINDOWS__ && !__CYGWIN__
-static int r_line_readchar_win(int *vch) { // this function handle the input in console mode
+#if __WINDOWS__
+static ut8 *r_line_readchar_win(int *vch) { // this function handle the input in console mode
 	INPUT_RECORD irInBuf;
 	BOOL ret, bCtrl = FALSE;
 	DWORD mode, out;
-	ut8 buf[2];
+	ut8 *buf = calloc (2, sizeof (ut8));
 	HANDLE h;
 	int i;
 	void *bed;
 
 	if (I.zerosep) {
 		*vch = 0;
-		buf[0] = 0;
 		bed = r_cons_sleep_begin ();
 		int rsz = read (0, buf, 1);
 		r_cons_sleep_end (bed);
 		if (rsz != 1)
-			return -1;
-		return buf[0];
+			return NULL;
+		return buf;
 	}
-
-	*buf = '\0';
 
 	h = GetStdHandle (STD_INPUT_HANDLE);
 	GetConsoleMode (h, &mode);
@@ -218,15 +215,16 @@ do_it_again:
 	ret = ReadConsoleInput (h, &irInBuf, 1, &out);
 	r_cons_sleep_end (bed);
 	if (ret < 1) {
+		free (buf);
 		return 0;
 	}
 	if (irInBuf.EventType == KEY_EVENT) {
 		if (irInBuf.Event.KeyEvent.bKeyDown) {
-			if (irInBuf.Event.KeyEvent.uChar.AsciiChar) {
-				*buf = irInBuf.Event.KeyEvent.uChar.AsciiChar;
+			if (irInBuf.Event.KeyEvent.uChar.UnicodeChar) {
+				free (buf);
+				buf = r_sys_conv_win_to_utf8_l ((PTCHAR)&irInBuf.Event.KeyEvent.uChar, 1);
 				bCtrl = irInBuf.Event.KeyEvent.dwControlKeyState & 8;
-			}
-			else {
+			} else {
 				switch (irInBuf.Event.KeyEvent.wVirtualKeyCode) {
 				case VK_DOWN: *vch = bCtrl ? 140 : 40; break;
 				case VK_UP: *vch = bCtrl ? 138 : 38; break;
@@ -244,7 +242,7 @@ do_it_again:
 		goto do_it_again;
 	}
 	SetConsoleMode (h, mode);
-	return buf[0];
+	return buf;
 }
 #endif
 
@@ -253,11 +251,11 @@ R_API int r_line_set_hist_callback(RLine *line, RLineHistoryUpCb up, RLineHistor
 	line->cb_history_down = down;
 	line->offset_hist_index = 0;
 	line->file_hist_index = 0;
-	line->sdbshell_hist_iter = line->sdbshell_hist? r_list_head (line->sdbshell_hist): NULL;
+	line->sdbshell_hist_iter = r_list_head (line->sdbshell_hist);
 	return 1;
 }
 
-R_API int cmd_history_up(RLine *line) {
+R_API int r_line_hist_cmd_up(RLine *line) {
 	if (line->hist_up) {
 		return line->hist_up (line->user);
 	}
@@ -272,7 +270,7 @@ R_API int cmd_history_up(RLine *line) {
 	return false;
 }
 
-R_API int cmd_history_down(RLine *line) {
+R_API int r_line_hist_cmd_down(RLine *line) {
 	if (line->hist_down) {
 		return line->hist_down (line->user);
 	}
@@ -326,14 +324,14 @@ R_API int r_line_hist_add(const char *line) {
 
 static int r_line_hist_up() {
 	if (!I.cb_history_up) {
-		r_line_set_hist_callback (&I, &cmd_history_up, &cmd_history_down);
+		r_line_set_hist_callback (&I, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
 	}
 	return I.cb_history_up (&I);
 }
 
 static int r_line_hist_down() {
 	if (!I.cb_history_down) {
-		r_line_set_hist_callback (&I, &cmd_history_up, &cmd_history_down);
+		r_line_set_hist_callback (&I, &r_line_hist_cmd_up, &r_line_hist_cmd_down);
 	}
 	return I.cb_history_down (&I);
 }
@@ -372,8 +370,7 @@ R_API void r_line_hist_free() {
 	int i;
 	if (I.history.data) {
 		for (i = 0; i < I.history.size; i++) {
-			free (I.history.data[i]);
-			I.history.data[i] = NULL;
+			R_FREE (I.history.data[i]);
 		}
 	}
 	R_FREE (I.history.data);
@@ -445,15 +442,24 @@ R_API int r_line_hist_chop(const char *file, int limit) {
 static void selection_widget_draw() {
 	RCons *cons = r_cons_singleton ();
 	RSelWidget *sel_widget = I.sel_widget;
-	int y, pos_y = cons->rows, pos_x = r_str_ansi_len (I.prompt);
-
+	int y, pos_y, pos_x = r_str_ansi_len (I.prompt);
+	sel_widget->h = R_MIN (sel_widget->h, R_SELWIDGET_MAXH);
 	for (y = 0; y < sel_widget->options_len; y++) {
 		sel_widget->w = R_MAX (sel_widget->w, strlen (sel_widget->options[y]));
 	}
+	if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
+		pos_y = cons->rows;
+	} else {
+		pos_y = r_cons_get_cur_line ();
+		if (pos_y + sel_widget->h > cons->rows) {
+			printf ("%s\n", r_str_pad('\n', sel_widget->h));
+			pos_y = cons->rows - sel_widget->h;
+		}
+	}
 	sel_widget->w = R_MIN (sel_widget->w, R_SELWIDGET_MAXW);
 
-	char *background_color = cons->color ? cons->pal.widget_bg : Color_INVERT_RESET;
-	char *selected_color = cons->color ? cons->pal.widget_sel : Color_INVERT;
+	char *background_color = cons->context->color_mode ? cons->context->pal.widget_bg : Color_INVERT_RESET;
+	char *selected_color = cons->context->color_mode ? cons->context->pal.widget_sel : Color_INVERT;
 	bool scrollbar = sel_widget->options_len > R_SELWIDGET_MAXH;
 	int scrollbar_y = 0, scrollbar_l = 0;
 	if (scrollbar) {
@@ -461,8 +467,12 @@ static void selection_widget_draw() {
 		scrollbar_l = (R_SELWIDGET_MAXH * R_SELWIDGET_MAXH) / sel_widget->options_len;
 	}
 
-	for (y = 0; y < R_MIN (sel_widget->h, R_SELWIDGET_MAXH); y++) {
-		r_cons_gotoxy (pos_x + 1, pos_y - y - 1);
+	for (y = 0; y < sel_widget->h; y++) {
+		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
+			r_cons_gotoxy (pos_x + 1, pos_y - y - 1);
+		} else {
+			r_cons_gotoxy (pos_x + 1, pos_y + y + 1);
+		}
 		int scroll = R_MAX (0, sel_widget->selection - sel_widget->scroll);
 		const char *option = y < sel_widget->options_len ? sel_widget->options[y + scroll] : "";
 		r_cons_printf ("%s", sel_widget->selection == y + scroll ? selected_color : background_color);
@@ -482,12 +492,21 @@ static void selection_widget_draw() {
 static void selection_widget_up(int steps) {
 	RSelWidget *sel_widget = I.sel_widget;
 	if (sel_widget) {
-		int height = R_MIN (sel_widget->h, R_SELWIDGET_MAXH - 1);
-		sel_widget->selection = R_MIN (sel_widget->selection + steps, sel_widget->options_len - 1);
-		if (steps == 1) {
-			sel_widget->scroll = R_MIN (sel_widget->scroll + 1, R_SELWIDGET_MAXH - 1);
-		} else if (sel_widget->selection + (height - sel_widget->scroll) > sel_widget->options_len - 1) {
-			sel_widget->scroll = height - (sel_widget->options_len - 1 - sel_widget->selection);
+		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
+			int height = R_MIN (sel_widget->h, R_SELWIDGET_MAXH - 1);
+			sel_widget->selection = R_MIN (sel_widget->selection + steps, sel_widget->options_len - 1);
+			if (steps == 1) {
+				sel_widget->scroll = R_MIN (sel_widget->scroll + 1, R_SELWIDGET_MAXH - 1);
+			} else if (sel_widget->selection + (height - sel_widget->scroll) > sel_widget->options_len - 1) {
+				sel_widget->scroll = height - (sel_widget->options_len - 1 - sel_widget->selection);
+			}
+		} else {
+			sel_widget->selection = R_MAX (sel_widget->selection - steps, 0);
+			if (steps == 1) {
+				sel_widget->scroll = R_MAX (sel_widget->scroll - 1, 0);
+			} else if (sel_widget->selection - sel_widget->scroll <= 0) {
+				sel_widget->scroll = sel_widget->selection;
+			}
 		}
 	}
 }
@@ -495,11 +514,21 @@ static void selection_widget_up(int steps) {
 static void selection_widget_down(int steps) {
 	RSelWidget *sel_widget = I.sel_widget;
 	if (sel_widget) {
-		sel_widget->selection = R_MAX (sel_widget->selection - steps, 0);
-		if (steps == 1) {
-			sel_widget->scroll = R_MAX (sel_widget->scroll - 1, 0);
-		} else if (sel_widget->selection - sel_widget->scroll <= 0) {
-			sel_widget->scroll = sel_widget->selection;
+		if (sel_widget->direction == R_SELWIDGET_DIR_UP) {
+			sel_widget->selection = R_MAX (sel_widget->selection - steps, 0);
+			if (steps == 1) {
+				sel_widget->scroll = R_MAX (sel_widget->scroll - 1, 0);
+			} else if (sel_widget->selection - sel_widget->scroll <= 0) {
+				sel_widget->scroll = sel_widget->selection;
+			}
+		} else {
+			int height = R_MIN (sel_widget->h, R_SELWIDGET_MAXH - 1);
+			sel_widget->selection = R_MIN (sel_widget->selection + steps, sel_widget->options_len - 1);
+			if (steps == 1) {
+				sel_widget->scroll = R_MIN (sel_widget->scroll + 1, R_SELWIDGET_MAXH - 1);
+			} else if (sel_widget->selection + (height - sel_widget->scroll) > sel_widget->options_len - 1) {
+				sel_widget->scroll = height - (sel_widget->options_len - 1 - sel_widget->selection);
+			}
 		}
 	}
 }
@@ -522,12 +551,21 @@ static void selection_widget_erase() {
 			cons->event_resize (cons->event_data);
 			cons->cb_task_oneshot (cons->user, print_rline_task, NULL);
 		}
+		printf ("%s", R_CONS_CLEAR_FROM_CURSOR_TO_END);
 	}
 }
 
 static void selection_widget_select() {
 	RSelWidget *sel_widget = I.sel_widget;
 	if (sel_widget && sel_widget->selection < sel_widget->options_len) {
+		char *sp = strchr (I.buffer.data, ' ');
+		if (sp) {
+			int delta = sp - I.buffer.data + 1;
+			I.buffer.length = R_MIN (delta + strlen (sel_widget->options[sel_widget->selection]), R_LINE_BUFSIZE - 1);
+			memcpy (I.buffer.data + delta, sel_widget->options[sel_widget->selection], I.buffer.length);
+			I.buffer.index = I.buffer.length;
+			return;
+		}
 		I.buffer.length = R_MIN (strlen (sel_widget->options[sel_widget->selection]), R_LINE_BUFSIZE - 1);
 		memcpy (I.buffer.data, sel_widget->options[sel_widget->selection], I.buffer.length);
 		I.buffer.data[I.buffer.length] = '\0';
@@ -537,8 +575,9 @@ static void selection_widget_select() {
 }
 
 static void selection_widget_update() {
-	if (I.completion.argc == 0 ||
-		(I.completion.argc == 1 && I.buffer.length >= strlen (I.completion.argv[0]))) {
+	int argc = r_pvector_len (&I.completion.args);
+	const char **argv = (const char **)r_pvector_data (&I.completion.args);
+	if (argc == 0 || (argc == 1 && I.buffer.length >= strlen (argv[0]))) {
 		selection_widget_erase ();
 		return;
 	}
@@ -548,9 +587,15 @@ static void selection_widget_update() {
 	}
 	I.sel_widget->scroll = 0;
 	I.sel_widget->selection = 0;
-	I.sel_widget->options_len = I.completion.argc;
-	I.sel_widget->options = I.completion.argv;
-	I.sel_widget->h = R_MAX (I.sel_widget->h, I.completion.argc);
+	I.sel_widget->options_len = argc;
+	I.sel_widget->options = argv;
+	I.sel_widget->h = R_MAX (I.sel_widget->h, I.sel_widget->options_len);
+
+	if (I.prompt_type ==  R_LINE_PROMPT_DEFAULT) {
+		I.sel_widget->direction = R_SELWIDGET_DIR_DOWN;
+	} else {
+		I.sel_widget->direction = R_SELWIDGET_DIR_UP;
+	}
 	selection_widget_draw ();
 	r_cons_flush ();
 	return;
@@ -562,13 +607,14 @@ R_API void r_line_autocomplete() {
 	int argc = 0, i, j, plen, len = 0;
 	bool opt = false;
 	int cols = (int)(r_cons_get_size (NULL) * 0.82);
+	RCons *cons = r_cons_singleton ();
 
 	/* prepare argc and argv */
 	if (I.completion.run) {
 		I.completion.opt = false;
-		I.completion.run (&I);
-		argc = I.completion.argc;
-		argv = I.completion.argv;
+		I.completion.run (&I.completion, &I.buffer, I.prompt_type, I.completion.run_user);
+		argc = r_pvector_len (&I.completion.args);
+		argv = (const char **)r_pvector_data (&I.completion.args);
 		opt = I.completion.opt;
 	}
 	if (I.sel_widget && !I.sel_widget->complete_common) {
@@ -654,7 +700,8 @@ R_API void r_line_autocomplete() {
 		}
 	}
 
-	if (I.offset_prompt || I.file_prompt) {
+	if (I.prompt_type != R_LINE_PROMPT_DEFAULT || cons->show_autocomplete_widget) {
+
 		selection_widget_update ();
 		if (I.sel_widget) {
 			I.sel_widget->complete_common = false;
@@ -666,7 +713,11 @@ R_API void r_line_autocomplete() {
 	if (argc > 1 && I.echo) {
 		const int sep = 3;
 		int slen, col = 10;
+#ifdef __WINDOWS__
+		r_cons_win_printf (false, "%s%s\n", I.prompt, I.buffer.data);
+#else
 		printf ("%s%s\n", I.prompt, I.buffer.data);
+#endif
 		for (i = 0; i < argc && argv[i]; i++) {
 			int l = strlen (argv[i]);
 			if (sep + l > col) {
@@ -695,18 +746,19 @@ R_API const char *r_line_readline() {
 	return r_line_readline_cb (NULL, NULL);
 }
 
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 	int columns = r_cons_get_size (NULL) - 2;
 	const char *gcomp_line = "";
 	static int gcomp_idx = 0;
 	static int gcomp = 0;
 	signed char buf[10];
-	int ch, i = 0;	/* grep completion */
+	ut8 *ch;
+	int i = 0;	/* grep completion */
 	int vch = 0;
 	char *tmp_ed_cmd, prev = 0;
 	HANDLE hClipBoard;
-	char *clipText;
+	PTCHAR clipText;
 	int prev_buflen = 0;
 
 	I.buffer.index = I.buffer.length = 0;
@@ -731,11 +783,10 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 	if (I.echo) {
 		if (I.ansicon) {
 			printf ("\r%s", R_CONS_CLEAR_LINE);
-			printf ("%s%s%s", Color_RESET, I.prompt, I.buffer.data);
 		} else {
 			r_cons_clear_line (0);
-			printf ("%s%s", I.prompt, I.buffer.data);
 		}
+		r_cons_win_printf (false, "%s%s%s", Color_RESET, I.prompt, I.buffer.data);
 		fflush (stdout);
 	}
 	r_cons_break_push (NULL, NULL);
@@ -746,11 +797,12 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 			I.buffer.length = 0;
 		}
 		ch = r_line_readchar_win (&vch);
-		if (ch == -1) {
+		if (!ch) {
 			r_cons_break_pop ();
 			return NULL;
 		}
-		buf[0] = ch;
+		r_str_cpy (buf, ch);
+		free (ch);
 		if (I.echo) {
 			if (I.ansicon) {
 				printf ("\r%s", R_CONS_CLEAR_LINE);
@@ -761,7 +813,9 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 		/* process special at vch codes first*/
 		switch (vch) {
 		case 37:	// left arrow
-			I.buffer.index = I.buffer.index? I.buffer.index - 1: 0;
+			I.buffer.index = I.buffer.index
+				? I.buffer.index - r_str_utf8_charsize_prev (I.buffer.data + I.buffer.index, I.buffer.index)
+				: 0;
 			break;
 		case 38:	// up arrow
 			if (I.sel_widget) {
@@ -775,12 +829,13 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 			}
 			break;
 		case 39:// right arrow
-			I.buffer.index = I.buffer.index < I.buffer.length?
-					 I.buffer.index + 1: I.buffer.length;
+			I.buffer.index = I.buffer.index < I.buffer.length
+				? I.buffer.index + r_str_utf8_charsize (I.buffer.data + I.buffer.index)
+				: I.buffer.length;
 			break;
 		case 40:// down arrow
 			if (I.sel_widget) {
-				selection_widget_up (1);
+				selection_widget_down (1);
 				selection_widget_draw ();
 			} else if (gcomp) {
 				if (gcomp_idx > 0) {
@@ -837,13 +892,14 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 		case 46:// supr
 			if (I.buffer.index < I.buffer.length) {
 				memmove (I.buffer.data + I.buffer.index,
-					I.buffer.data + I.buffer.index + 1,
+					I.buffer.data + I.buffer.index + r_str_utf8_charsize (I.buffer.data + I.buffer.index),
 					strlen (I.buffer.data + I.buffer.index + 1) + 1);
 			}
 			if (buf[1] == -1) {
 				r_cons_break_pop ();
 				return NULL;
 			}
+			I.buffer.length = strlen (I.buffer.data);
 			break;
 
 		default:
@@ -943,17 +999,28 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 			break;
 		case 22:// ^V - Paste from windows clipboard
 			if (OpenClipboard (NULL)) {
+#if UNICODE
+				hClipBoard = GetClipboardData (CF_UNICODETEXT);
+#else
 				hClipBoard = GetClipboardData (CF_TEXT);
+#endif
 				if (hClipBoard) {
 					clipText = GlobalLock (hClipBoard);
 					if (clipText) {
-						I.buffer.length += strlen (clipText);
+						char *txt = r_sys_conv_win_to_utf8 (clipText);
+						if (!txt) {
+							R_LOG_ERROR ("Failed to allocate memory\n");
+							break;
+						}
+						int len = strlen (txt);
+						I.buffer.length += len;
 						if (I.buffer.length < R_LINE_BUFSIZE) {
 							I.buffer.index = I.buffer.length;
-							strcat (I.buffer.data, clipText);
+							strcat (I.buffer.data, txt);
 						} else {
-							I.buffer.length -= strlen (I.clipboard);
+							I.buffer.length -= len;
 						}
+						free (txt);
 					}
 					GlobalUnlock (hClipBoard);
 				}
@@ -994,10 +1061,9 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 		case 127:
 			if (I.buffer.index < I.buffer.length) {
 				if (I.buffer.index > 0) {
-					int len = 0;
+					int len = r_str_utf8_charsize_prev (I.buffer.data + I.buffer.index, I.buffer.index);
 					// TODO: WIP
-					len = 1;
-					I.buffer.index--;
+					I.buffer.index -= len;
 					memmove (I.buffer.data + I.buffer.index,
 						I.buffer.data + I.buffer.index + len,
 						strlen (I.buffer.data + I.buffer.index));
@@ -1006,7 +1072,8 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 				}
 			} else {
 // OK
-				I.buffer.index = --I.buffer.length;
+				I.buffer.length -= r_str_utf8_charsize_last (I.buffer.data);
+				I.buffer.index = I.buffer.length;
 				if (I.buffer.length < 0) {
 					I.buffer.length = 0;
 				}
@@ -1040,20 +1107,27 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 			if (gcomp) {
 				gcomp++;
 			}
+			int size = r_str_utf8_charsize (buf);
+			if (I.buffer.length + size > (R_LINE_BUFSIZE - 1)) {
+				break;
+			}
 			if (I.buffer.index < I.buffer.length) {
-				for (i = ++I.buffer.length; i > I.buffer.index; i--) {
-					I.buffer.data[i] = I.buffer.data[i - 1];
+				I.buffer.length += size;
+				for (i = I.buffer.length; i - size + 1 > I.buffer.index; i--) {
+					I.buffer.data[i] = I.buffer.data[i - size];
 				}
-				I.buffer.data[I.buffer.index] = buf[0];
+				int sz = size;
+				while (sz) {
+					I.buffer.data[i--] = buf[--sz];
+				}
 			} else {
-				I.buffer.data[I.buffer.length] = buf[0];
-				I.buffer.length++;
-				if (I.buffer.length > (R_LINE_BUFSIZE - 1)) {
-					I.buffer.length--;
+				for (i = 0; I.buffer.length + i <= R_LINE_BUFSIZE - 1 && buf[i]; i++) {
+					I.buffer.data[I.buffer.length + i] = buf[i];
 				}
+				I.buffer.length += i;
 				I.buffer.data[I.buffer.length] = '\0';
 			}
-			I.buffer.index++;
+			I.buffer.index += size;
 			break;
 		}
 		if (I.sel_widget && I.buffer.length != prev_buflen) {
@@ -1082,14 +1156,10 @@ R_API const char *r_line_readline_cb_win(RLineReadCallback cb, void *user) {
 				int chars = R_MAX (1, strlen (I.buffer.data));	// wtf?
 				int len, cols = R_MAX (1, columns - r_str_ansi_len (I.prompt) - 2);
 				/* print line */
-				if (I.ansicon) {
-					printf ("\r%s%s", Color_RESET, I.prompt);
-				} else {
-					printf ("\r%s", I.prompt);
-				}
+				r_cons_win_printf (false, "\r%s%s", Color_RESET, I.prompt);
 				fwrite (I.buffer.data, 1, R_MIN (cols, chars), stdout);
 				/* place cursor */
-				printf ("\r%s", I.prompt);
+				r_cons_win_printf (false, "\r%s", I.prompt);
 				if (I.buffer.index > cols) {
 					printf ("< ");
 					i = I.buffer.index - cols;
@@ -1111,7 +1181,7 @@ _end:
 	r_cons_break_pop ();
 	r_cons_set_raw (0);
 	if (I.echo) {
-		printf ("\r%s%s\n", I.prompt, I.buffer.data);
+		r_cons_win_printf (false, "\r%s%s\n", I.prompt, I.buffer.data);
 		fflush (stdout);
 	}
 
@@ -1127,7 +1197,7 @@ _end:
 #endif
 
 R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 	// new implementation for read input at windows by skuater. If something fail set this to 0
 	return r_line_readline_cb_win (cb, user);
 #endif
@@ -1201,7 +1271,7 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 		if (columns < 1) {
 			columns = 40;
 		}
-#if __WINDOWS__ && !__CYGWIN__
+#if __WINDOWS__
 		if (I.echo) {
 			printf ("\r%*c\r", columns, ' ');
 		}
@@ -1326,6 +1396,9 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 			fflush (stdout);
 			break;
 		case 18:// ^R -- autocompletion
+			if (gcomp) {
+				gcomp_idx++;
+			}
 			gcomp = 1;
 			break;
 		case 19:// ^S -- backspace
@@ -1646,7 +1719,7 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 			}
 			break;
 		case 9:	// tab
-			if (I.buffer.data[I.buffer.length - 1] == '@') {
+			if (I.buffer.length > 0 && I.buffer.data[I.buffer.length - 1] == '@') {
 				strcpy (I.buffer.data + I.buffer.length, " ");
 				I.buffer.length++;
 				I.buffer.index++;
@@ -1722,16 +1795,20 @@ R_API const char *r_line_readline_cb(RLineReadCallback cb, void *user) {
 		if (I.echo) {
 			if (gcomp) {
 				gcomp_line = "";
+				int counter = 0;
 				if (I.history.data != NULL) {
-					for (i = 0; i < I.history.size; i++) {
+					for (i = I.history.size-1; i >= 0; i--) {
 						if (!I.history.data[i]) {
-							break;
+							continue;
 						}
 						if (strstr (I.history.data[i], I.buffer.data)) {
 							gcomp_line = I.history.data[i];
-							if (!gcomp_idx--) {
+							if (++counter > gcomp_idx) {
 								break;
 							}
+						}
+						if (i == 0) {
+							gcomp_idx--;
 						}
 					}
 				}

@@ -1,4 +1,4 @@
-files = [
+r_debug_sources = [
   'arg.c',
   'ddesc.c',
   'debug.c',
@@ -32,27 +32,52 @@ files = [
   #'p/native/maps/darwin.c',
 ]
 
+r_debug_deps = [
+  r_util_dep,
+  r_hash_dep,
+  r_reg_dep,
+  r_syscall_dep,
+  r_anal_dep,
+  r_flag_dep,
+  r_io_dep,
+  r_bp_dep,
+  r_search_dep,
+  r_cons_dep,
+  r_lang_dep,
+  r_egg_dep,
+  windbg_dep,
+  qnx_dep,
+  gdb_dep,
+  bochs_dep,
+  r_socket_dep,
+  sdb_dep
+]
+
 if host_machine.system() == 'linux'
-  files += [
+  r_debug_sources += [
     'p/native/linux/linux_debug.c',
     'p/native/linux/linux_coredump.c'
   ]
 endif
 
 if host_machine.system() != 'windows'
- files += [
+ r_debug_sources += [
   'p/native/procfs.c'
  ]
 endif
 
 if host_machine.system() == 'darwin'
-  files += [
+  r_debug_sources += [
     'p/native/xnu/xnu_debug.c',
     #'p/native/xnu/trap_arm.c',
     #'p/native/xnu/trap_x86.c',
     #'p/native/xnu/xnu_excthreads.c',
     #'p/native/xnu/xnu_threads.c',
   ]
+endif
+
+if ['netbsd', 'freebsd', 'dragonfly'].contains(host_machine.system())
+  r_debug_deps += cc.find_library('kvm', required: true)
 endif
 
 r_debug_inc = [
@@ -62,29 +87,10 @@ r_debug_inc = [
   )
 ]
 
-r_debug = library('r_debug', files,
+r_debug = library('r_debug', r_debug_sources,
   include_directories: r_debug_inc,
   c_args: library_cflags,
-  dependencies: [
-    r_util_dep,
-    r_hash_dep,
-    r_reg_dep,
-    r_syscall_dep,
-    r_anal_dep,
-    r_flag_dep,
-    r_io_dep,
-    r_bp_dep,
-    r_search_dep,
-    r_cons_dep,
-    r_lang_dep,
-    r_egg_dep,
-    windbg_dep,
-    qnx_dep,
-    gdb_dep,
-    bochs_dep,
-    r_socket_dep,
-    sdb_dep
-  ],
+  dependencies: r_debug_deps,
   install: true,
   implicit_include_directories: false,
   soversion: r2_libversion
@@ -93,8 +99,7 @@ r_debug = library('r_debug', files,
 r_debug_dep = declare_dependency(link_with: r_debug,
                                  include_directories: r_debug_inc)
 
-pkgconfig_mod.generate(
-  libraries: [r_debug],
+pkgconfig_mod.generate(r_debug,
   subdirs: 'libr',
   version: r2_version,
   name: 'r_debug',
