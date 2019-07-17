@@ -28,6 +28,7 @@ static const char *help_msg_slash[] = {
 	"/ce", "[j] rsp,rbp", "search for esil expressions matching",
 	"/ci", "[j] 0x300", "find all the instructions using that immediate",
 	"/ci", "[j] 0x300 0x500", "find all the instructions using an immediate",
+	"/cc ", "instr", "search for instruction 'instr' ignoring case",
 	"/C", "[ar]", "search for crypto materials",
 	"/d", " 101112", "search for a deltified sequence of bytes",
 	"/e", " /E.F/i", "match regular expression",
@@ -74,6 +75,7 @@ static const char *help_msg_slash_c[] = {
 	"/ca ", "instr", "search for instruction 'instr' (in all offsets)",
 	"/ce ", "esil", "search for esil expressions matching substring",
 	"/ci", "[j] 0x300", "find all the instructions using that immediate",
+	"/cc ", "instr", "search for instruction 'instr' ignoring case",
 	"/c/ ", "instr", "search for instruction that matches regexp 'instr'",
 	"/c/a ", "instr", "search for every byte instruction that matches regexp 'instr'",
 	"/c ", "instr1;instr2", "search for instruction 'instr1' followed by 'instr2'",
@@ -251,18 +253,18 @@ hell:
 }
 
 static void cmd_search_bin(RCore *core, RInterval itv) {
-	RBinPlugin *plug;
-	ut8 buf[1024];
 	ut64 from = itv.addr, to = r_itv_end (itv);
-	int size, sz = sizeof (buf);
+	int size; // , sz = sizeof (buf);
 
+	int fd = core->file->fd;
+	RBuffer *b = r_buf_new_with_io (&core->anal->iob, fd);
 	r_cons_break_push (NULL, NULL);
 	while (from < to) {
 		if (r_cons_is_breaked ()) {
 			break;
 		}
-		r_io_read_at (core->io, from, buf, sz);
-		plug = r_bin_get_binplugin_by_bytes (core->bin, buf, sz);
+		RBuffer *ref = r_buf_new_slice (b, from, to);
+		RBinPlugin *plug = r_bin_get_binplugin_by_buffer (core->bin, ref);
 		if (plug) {
 			r_cons_printf ("0x%08" PFMT64x "  %s\n", from, plug->name);
 			if (plug->size) {
@@ -274,7 +276,7 @@ static void cmd_search_bin(RCore *core, RInterval itv) {
 					.sz = 4096,
 					.xtr_idx = 0,
 					.rawstr = core->bin->rawstr,
-					.fd = core->file->fd,
+					.fd = fd,
 				};
 				r_bin_open_io (core->bin, &opt);
 				size = plug->size (core->bin->cur);
@@ -283,8 +285,10 @@ static void cmd_search_bin(RCore *core, RInterval itv) {
 				}
 			}
 		}
+		r_buf_free (ref);
 		from++;
 	}
+	r_buf_free (b);
 	r_cons_break_pop ();
 }
 
@@ -328,7 +332,7 @@ R_API int r_core_search_prelude(RCore *core, ut64 from, ut64 to, const ut8 *buf,
 		}
 	}
 	// r_search_reset might also benifet from having an if(s->data) R_FREE(s->data), but im not sure.
-	//add a commit that puts it in there to this PR if it wouldnt break anything. (dont have to worry about this happening again, since all searches start by resetting core->search)
+	//add a commit that puts it in there to this PR if it wouldn't break anything. (don't have to worry about this happening again, since all searches start by resetting core->search)
 	//For now we will just use r_search_kw_reset
 	r_search_kw_reset (core->search);
 	free (b);
@@ -678,7 +682,7 @@ R_API RList *r_core_get_boundaries_prot(RCore *core, int perm, const char *mode,
 		if (m) {
 			append_bound (list, core->io, search_itv, m->itv.addr, m->itv.size, m->perm);
 		}
-	} else if (!strcmp (mode, "io.maps")) { // Non-overlapping RIOMap parts not overriden by others (skyline)
+	} else if (!strcmp (mode, "io.maps")) { // Non-overlapping RIOMap parts not overridden by others (skyline)
 		ut64 begin = UT64_MAX;
 		ut64 end = UT64_MAX;
 #define USE_SKYLINE 0
@@ -737,25 +741,6 @@ R_API RList *r_core_get_boundaries_prot(RCore *core, int perm, const char *mode,
 			}
 			append_bound (list, core->io, search_itv, from, r_itv_size (map->itv), rwx);
 		}
-#if 0
-	} else if (r_str_startswith (mode, "bin.sections.")) {
-		int len = strlen ("bin.sections.");
-		int mask = (mode[len - 1] == '.')? r_str_rwx (mode + len): 0;
-		bool only = (bool)(size_t)strstr (mode, ".only");
-		RBinObject *obj = r_bin_cur_object (core->bin);
-		if (obj) {
-			RBinSection *s;
-			RListIter *iter;
-			r_list_foreach (obj->sections, iter, s) {
-				if (maskMatches (s->perm, mask, only)) {
-					continue;
-				}
-				ut64 addr = core->io->va? s->vaddr: s->paddr;
-				ut64 size = core->io->va? s->vsize: s->size;
-				append_bound (list, core->io, search_itv, addr, size, s->perm);
-			}
-		}
-#endif
 	} else if (r_str_startswith (mode, "io.sky.")) {
 		int len = strlen ("io.sky.");
 		int mask = (mode[len - 1] == '.')? r_str_rwx (mode + len): 0;
@@ -792,6 +777,26 @@ R_API RList *r_core_get_boundaries_prot(RCore *core, int perm, const char *mode,
 		if (end != UT64_MAX) {
 			append_bound (list, NULL, search_itv, begin, end - begin, 7);
 		}
+	} else if (r_str_startswith (mode, "bin.segments")) {
+		int len = strlen ("bin.segments.");
+		int mask = (mode[len - 1] == '.')? r_str_rwx (mode + len): 0;
+		bool only = (bool)(size_t)strstr (mode, ".only");
+		RBinObject *obj = r_bin_cur_object (core->bin);
+		if (obj) {
+			RBinSection *s;
+			RListIter *iter;
+			r_list_foreach (obj->sections, iter, s) {
+				if (!s->is_segment) {
+					continue;
+				}
+				if (maskMatches (s->perm, mask, only)) {
+					continue;
+				}
+				ut64 addr = core->io->va? s->vaddr: s->paddr;
+				ut64 size = core->io->va? s->vsize: s->size;
+				append_bound (list, core->io, search_itv, addr, size, s->perm);
+			}
+		}
 	} else if (r_str_startswith (mode, "bin.sections")) {
 		int len = strlen ("bin.sections.");
 		int mask = (mode[len - 1] == '.')? r_str_rwx (mode + len): 0;
@@ -801,6 +806,9 @@ R_API RList *r_core_get_boundaries_prot(RCore *core, int perm, const char *mode,
 			RBinSection *s;
 			RListIter *iter;
 			r_list_foreach (obj->sections, iter, s) {
+				if (s->is_segment) {
+					continue;
+				}
 				if (maskMatches (s->perm, mask, only)) {
 					continue;
 				}
@@ -809,12 +817,31 @@ R_API RList *r_core_get_boundaries_prot(RCore *core, int perm, const char *mode,
 				append_bound (list, core->io, search_itv, addr, size, s->perm);
 			}
 		}
+	} else if (!strcmp (mode, "bin.segment")) {
+		RBinObject *obj = r_bin_cur_object (core->bin);
+		if (obj) {
+			RBinSection *s;
+			RListIter *iter;
+			r_list_foreach (obj->sections, iter, s) {
+				if (!s->is_segment) {
+					continue;
+				}
+				ut64 addr = core->io->va? s->vaddr: s->paddr;
+				ut64 size = core->io->va? s->vsize: s->size;
+				if (R_BETWEEN (addr, core->offset, addr + size)) {
+					append_bound (list, core->io, search_itv, addr, size, s->perm);
+				}
+			}
+		}
 	} else if (!strcmp (mode, "bin.section")) {
 		RBinObject *obj = r_bin_cur_object (core->bin);
 		if (obj) {
 			RBinSection *s;
 			RListIter *iter;
 			r_list_foreach (obj->sections, iter, s) {
+				if (s->is_segment) {
+					continue;
+				}
 				ut64 addr = core->io->va? s->vaddr: s->paddr;
 				ut64 size = core->io->va? s->vsize: s->size;
 				if (R_BETWEEN (addr, core->offset, addr + size)) {
@@ -1552,7 +1579,7 @@ bad:
 	return result;
 }
 
-static int esil_addrinfo(RAnalEsil *esil) {
+static bool esil_addrinfo(RAnalEsil *esil) {
 	RCore *core = (RCore *) esil->cb.user;
 	ut64 num = 0;
 	char *src = r_anal_esil_pop (esil);
@@ -1561,10 +1588,10 @@ static int esil_addrinfo(RAnalEsil *esil) {
 		r_anal_esil_pushnum (esil, num);
 	} else {
 // error. empty stack?
-		return 0;
+		return false;
 	}
 	free (src);
-	return 1;
+	return true;
 }
 
 static void do_esil_search(RCore *core, struct search_parameters *param, const char *input) {
@@ -1602,7 +1629,7 @@ static void do_esil_search(RCore *core, struct search_parameters *param, const c
 		}
 		/* hook addrinfo */
 		core->anal->esil->cb.user = core;
-		r_anal_esil_set_op (core->anal->esil, "AddrInfo", esil_addrinfo);
+		r_anal_esil_set_op (core->anal->esil, "AddrInfo", esil_addrinfo, 1, 1, R_ANAL_ESIL_OP_TYPE_UNKNOWN);
 		/* hook addrinfo */
 		r_anal_esil_setup (core->anal->esil, core->anal, 1, 0, nonull);
 		r_anal_esil_stack_free (core->anal->esil);
@@ -2340,6 +2367,13 @@ static void do_string_search(RCore *core, RInterval search_itv, struct search_pa
 				eprintf ("Sandbox restricts search range\n");
 				break;
 			}
+			if (!core->search->bckwrds) {
+				RListIter* it;
+				RSearchKeyword* kw;
+				r_list_foreach (core->search->kws, it, kw) {
+					kw->last = 0;
+				}
+			}
 
 			const ut64 from = itv.addr, to = r_itv_end (itv),
 					from1 = search->bckwrds ? to : from,
@@ -2652,7 +2686,79 @@ static void incBuffer(ut8 *buf, int bufsz) {
 	// may overflow/hang/end/stop/whatever here
 }
 
-static void search_collisions(RCore *core, const char *hashName, const ut8 *hashValue, int hashLength) {
+static void incPrintBuffer(ut8 *buf, int bufsz) {
+	int i = 0;
+	while (i < bufsz) {
+		buf[i]++;
+		if (!buf[i]) {
+			i++;
+			continue;
+		}
+		if (IS_PRINTABLE (buf[i])) {
+			break;
+		}
+	}
+}
+
+static void incLowerBuffer(ut8 *buf, int bufsz) {
+	int i = 0;
+	while (i < bufsz) {
+		buf[i]++;
+		if (buf[i] && isalpha (buf[i]) && islower (buf[i])) {
+			break;
+		}
+		if (!buf[i]) {
+			i++;
+			continue;
+		}
+	}
+}
+
+static void incUpperBuffer(ut8 *buf, int bufsz) {
+	int i = 0;
+	while (i < bufsz) {
+		buf[i]++;
+		if (buf[i] && isalpha (buf[i]) && isupper (buf[i])) {
+			break;
+		}
+		if (!buf[i]) {
+			i++;
+			continue;
+		}
+	}
+}
+
+static void incAlphaBuffer(ut8 *buf, int bufsz) {
+	int i = 0;
+	while (i < bufsz) {
+		buf[i]++;
+		if (buf[i] && isalpha (buf[i])) {
+			break;
+		}
+		if (!buf[i]) {
+			i++;
+			continue;
+		}
+	}
+	// may overflow/hang/end/stop/whatever here
+}
+
+static void incDigitBuffer(ut8 *buf, int bufsz) {
+	int i = 0;
+	while (i < bufsz) {
+		buf[i]++;
+		if (buf[i] && isdigit (buf[i])) {
+			break;
+		}
+		if (!buf[i]) {
+			i++;
+			continue;
+		}
+	}
+	// may overflow/hang/end/stop/whatever here
+}
+
+static void search_collisions(RCore *core, const char *hashName, const ut8 *hashValue, int hashLength, int mode) {
 	ut8 R_ALIGNED(8) cmphash[128];
 	int i, algoType = R_HASH_CRC32;
 	int bufsz = core->blocksize;
@@ -2693,19 +2799,46 @@ static void search_collisions(RCore *core, const char *hashName, const ut8 *hash
 			amount = 0;
 			prev = now;
 		}
-		incBuffer (buf, bufsz);
+		switch (mode) {
+		case 'p': // digits+alpha
+			incPrintBuffer (buf, bufsz);
+			break;
+		case 'a': // lowercase alpha
+			incLowerBuffer (buf, bufsz);
+			break;
+		case 'A': // uppercase alpha
+			incUpperBuffer (buf, bufsz);
+			break;
+		case 'l': // letters
+			incAlphaBuffer (buf, bufsz);
+			break;
+		case 'd': // digits
+			incDigitBuffer (buf, bufsz);
+			break;
+		default: // binary
+			incBuffer (buf, bufsz);
+			break;
+		}
+
+		eprintf ("0x%08" PFMT64x " input:", inc);
+		for (i = 0; i < bufsz; i++) {
+			eprintf ("%02x", buf[i]);
+		}
+		if (mode) {
+			eprintf (" \"%s\"", buf);
+		}
 
 		r_hash_do_begin (ctx, hashBits);
 		(void)r_hash_calculate (ctx, hashBits, buf, bufsz);
 		r_hash_do_end (ctx, hashBits);
 
-		eprintf ("0x%08" PFMT64x " ", inc);
+		eprintf (" digest:");
 		for (i = 0; i < hashLength; i++) {
 			eprintf ("%02x", ctx->digest[i]);
 		}
 		eprintf (" (%d h/s)  \r", mount);
 		if (!memcmp (hashValue, ctx->digest, hashLength)) {
-			eprintf ("\nCOLLISION!\n");
+			eprintf ("\nCOLLISION FOUND!\n");
 			r_print_hexdump (core->print, core->offset, buf, bufsz, 0, 16, 0);
 			r_cons_flush ();
 		}
@@ -3116,13 +3249,21 @@ reread:
 		case 'c': // "Cc"
 			{
 				ret = false;
-				const char *arg = r_str_trim_ro (input + 2);
-				if (!arg) {
-					eprintf ("Usage: /Cc [hashname] [hexpairhashvalue]\n");
+				char *space = strchr (input, ' ');
+				const char *arg = space? r_str_trim_ro (space + 1): NULL;
+				if (!arg || input[2] == '?') {
+					eprintf ("Usage: /Cc[aAdlpb] [hashname] [hexpairhashvalue]\n");
+					eprintf (" /Cca - lowercase alphabet chars only\n");
+					eprintf (" /CcA - uppercase alphabet chars only\n");
+					eprintf (" /Ccl - letters (lower + upper alphabet chars)\n");
+					eprintf (" /Ccd - digits (only numbers)\n");
+					eprintf (" /Ccp - printable (alpha + digit)\n");
+					eprintf (" /Ccb - binary (any number is valid)\n");
 					goto beach;
 				}
 				char *s = strdup (arg);
 				char *sp = strchr (s, ' ');
+				int mode = input[2];
 				if (sp) {
 					*sp = 0;
 					sp++;
@@ -3131,7 +3272,7 @@ reread:
 					if (hashValue) {
 						int hashLength = r_hex_str2bin (sp, hashValue);
 						if (hashLength > 0) {
-							search_collisions (core, hashName, hashValue, hashLength);
+							search_collisions (core, hashName, hashValue, hashLength, mode);
 						} else {
 							eprintf ("Invalid expected hash hexpairs.\n");
 						}
@@ -3143,6 +3284,7 @@ reread:
 					goto beach;
 				} else {
 					eprintf ("Usage: /Cc [hashname] [hexpairhashvalue]\n");
+					eprintf ("Usage: /CC to search ascii collisions\n");
 					goto beach;
 				}
 				free (s);
@@ -3512,7 +3654,7 @@ reread:
 		break;
 	case 'h': // "/h"
 	{
-		char *p, *arg = r_str_trim (strdup (input + 1));
+		char *p, *arg = r_str_trim_dup (input + 1);
 		p = strchr (arg, ' ');
 		if (p) {
 			*p++ = 0;
@@ -3659,6 +3801,8 @@ reread:
 			do_asm_search (core, &param, input + 1, 'i', search_itv);
 		} else if (input[1] == 'e') { // "/ce"
 			do_asm_search (core, &param, input + 1, 'e', search_itv);
+		} else if (input[1] == 'c') { // "/cc"
+			do_asm_search (core, &param, input + 1, 'c', search_itv);
 		} else { // "/c"
 			do_asm_search (core, &param, input, 0, search_itv);
 		}

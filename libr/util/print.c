@@ -23,6 +23,14 @@ static int libc_printf(const char *format, ...) {
 	return 0;
 }
 
+static int libc_eprintf(const char *format, ...) {
+	va_list ap;
+	va_start (ap, format);
+	vfprintf (stderr, format, ap);
+	va_end (ap);
+	return 0;
+}
+
 static RPrintIsInterruptedCallback is_interrupted_cb = NULL;
 
 R_API void r_print_portionbar(RPrint *p, const ut64 *portions, int n_portions) {
@@ -294,6 +302,7 @@ R_API RPrint* r_print_new() {
 	p->pairs = true;
 	p->resetbg = true;
 	p->cb_printf = libc_printf;
+	p->cb_eprintf = libc_eprintf;
 	p->oprintf = nullprinter;
 	p->bits = 32;
 	p->stride = 0;
@@ -389,6 +398,20 @@ R_API bool r_print_have_cursor(RPrint *p, int cur, int len) {
 	return false;
 }
 
+R_API bool r_print_cursor_pointer(RPrint *p, int cur, int len) {
+	r_return_val_if_fail (p, false);
+	if (!p->cur_enabled) {
+		return false;
+	}
+	int to = p->cur;
+	do {
+		if (cur + len - 1 == to) {
+			return true;
+		}
+	} while (--len);
+	return false;
+}
+
 R_API void r_print_cursor(RPrint *p, int cur, int len, int set) {
 	if (r_print_have_cursor (p, cur, len)) {
 		p->cb_printf ("%s", R_CONS_INVERT (set, 1));
@@ -410,7 +433,7 @@ R_API void r_print_addr(RPrint *p, ut64 addr) {
 	if (p && p->flags & R_PRINT_FLAGS_COMPACT && p->col == 1) {
 		ch = '|';
 	}
-	if (p->pava) {
+	if (p && p->pava) {
 		ut64 va = p->iob.p2v (p->iob.io, addr);
 		if (va != UT64_MAX) {
 			addr = va;
@@ -766,6 +789,19 @@ R_API void r_print_set_screenbounds(RPrint *p, ut64 addr) {
 	}
 }
 
+R_API void r_print_section(RPrint *p, ut64 at) {
+	bool use_section = p && p->flags & R_PRINT_FLAGS_SECTION;
+	if (use_section) {
+		const char *s = p->get_section_name (p->user, at);
+		if (!s) {
+			s = strdup ("");
+		}
+		char *tail = r_str_ndup (s, 19);
+		p->cb_printf ("%20s ", tail);
+		free (tail);
+	}
+}
+
 R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int base, int step, int zoomsz) {
 	PrintfCallback printfmt = (PrintfCallback) printf;
 	bool c = p->flags & R_PRINT_FLAGS_COLOR;
@@ -777,8 +813,8 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 	int use_sparse = 0;
 	bool use_header = true;
 	bool use_hdroff = true;
-	int use_pair = 1;
-	int use_offset = 1;
+	bool use_pair = true;
+	bool use_offset = true;
 	bool compact = false;
 	int use_segoff = 0;
 	int pairs = 0;
@@ -1010,8 +1046,9 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 				last_sparse = 0;
 			}
 		}
+		ut64 at = addr + (j * zoomsz);
 		if (use_offset && !isPxr) {
-			ut64 at = addr + (j * zoomsz);
+			r_print_section (p, at);
 			r_print_addr (p, at);
 		}
 		int row_have_cursor = -1;
@@ -1028,7 +1065,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 					}
 				}
 				if (row_have_cursor == -1) {
-					if (r_print_have_cursor (p, j, 1)) {
+					if (r_print_cursor_pointer (p, j, 1)) {
 						row_have_cursor = j - i;
 						row_have_addr = addr + j;
 					}
@@ -1098,6 +1135,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 					}
 					if (printValue) {
 						if (use_offset && !hasNull && isPxr) {
+							r_print_section (p, at);
 							r_print_addr (p, addr + j * zoomsz);
 						}
 						if (base == 64) {
@@ -1109,8 +1147,10 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 						}
 					} else {
 						if (hasNull) {
+							const char *n = p->offname (p->user, addr + j);
+							r_print_section (p, at);
 							r_print_addr (p, addr + j * zoomsz);
-							printfmt ("... (null) ...\n");
+							printfmt ("..[ null bytes ]..   00000000 %s\n", n? n: "");
 						}
 					}
 					r_print_cursor (p, j, sz_n, 0);
@@ -1279,7 +1319,6 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 		}
 		rows++;
 		bytes = 0;
-
 		if (p && p->cfmt && *p->cfmt) {
 			if (row_have_cursor != -1) {
 				int i = 0;
@@ -1499,7 +1538,8 @@ static RPrint staticp = {
 };
 
 /* TODO: handle screen width */
-R_API void r_print_progressbar(RPrint *p, int pc, int _cols) {
+R_API void r_print_progressbar(RPrint *p, int _pc, int _cols) {
+	double pc = _pc;
 	// TODO: add support for colors
 	int i, cols = (_cols == -1)? 78: _cols;
 	if (!p) {
@@ -1589,6 +1629,9 @@ R_API void r_print_zoom_buf(RPrint *p, void *user, RPrintZoomCallback cb, ut64 f
 
 		// TODO: memoize blocks or gtfo
 		for (i = 0; i < len; i++) {
+			if (p->cons->context->breaked) {
+				break;
+			}
 			p->iob.read_at (p->iob.io, from + j, bufz2, size);
 			bufz[i] = cb (user, p->zoom->mode, from + j, bufz2, size);
 			j += size;
@@ -2210,13 +2253,14 @@ R_API void r_print_hex_from_bin (RPrint *p, char *bin_str) {
 R_API const char* r_print_rowlog(RPrint *print, const char *str) {
 	int use_color = print->flags & R_PRINT_FLAGS_COLOR;
 	bool verbose = print->scr_prompt;
+	r_return_val_if_fail (print->cb_eprintf, NULL);
 	if (!verbose) {
 		return NULL;
 	}
 	if (use_color) {
-		eprintf ("[ ] "Color_YELLOW"%s\r["Color_RESET, str);
+		print->cb_eprintf ("[ ] "Color_YELLOW"%s\r["Color_RESET, str);
 	} else {
-		eprintf ("[ ] %s\r[", str);
+		print->cb_eprintf ("[ ] %s\r[", str);
 	}
 	return str;
 }
@@ -2224,11 +2268,12 @@ R_API const char* r_print_rowlog(RPrint *print, const char *str) {
 R_API void r_print_rowlog_done(RPrint *print, const char *str) {
 	int use_color = print->flags & R_PRINT_FLAGS_COLOR;
 	bool verbose =  print->scr_prompt;
+	r_return_if_fail (print->cb_eprintf);
 	if (verbose) {
 		if (use_color) {
-			eprintf ("\r"Color_GREEN"[x]"Color_RESET" %s\n", str);
+			print->cb_eprintf ("\r"Color_GREEN"[x]"Color_RESET" %s\n", str);
 		} else {
-			eprintf ("\r[x] %s\n", str);
+			print->cb_eprintf ("\r[x] %s\n", str);
 		}
 	}
 }

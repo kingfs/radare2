@@ -947,6 +947,7 @@ static RList *sections(RBinFile *bf) {
 		ptr->paddr = seg->fileoff + bf->o->boffset;
 		ptr->vaddr = seg->vmaddr;
 		ptr->add = true;
+		ptr->is_segment = true;
 		if (!ptr->vaddr) {
 			ptr->vaddr = ptr->paddr;
 		}
@@ -990,7 +991,6 @@ static void sections_from_mach0(RList *ret, struct MACH0_(obj_t) *mach0, RBinFil
 		ptr->vsize = sections[i].vsize;
 		ptr->paddr = sections[i].offset + bf->o->boffset + paddr;
 		ptr->vaddr = K_PPTR (sections[i].addr);
-		ptr->add = true;
 		if (!ptr->vaddr) {
 			ptr->vaddr = ptr->paddr;
 		}
@@ -2012,7 +2012,7 @@ RBinPlugin r_bin_plugin_xnu_kernelcache = {
 	.info = &info
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_BIN,
 	.data = &r_bin_plugin_kernelcache,

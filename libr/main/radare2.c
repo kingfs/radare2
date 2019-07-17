@@ -24,6 +24,7 @@ static bool threaded = false;
 static bool haveRarunProfile = false;
 static struct r_core_t r;
 static int do_analysis = 0;
+static bool forcequit = false;
 
 static bool is_valid_gdb_file(RCoreFile *fh) {
 	RIODesc *d = fh && fh->core ? r_io_desc_get (fh->core->io, fh->fd) : NULL;
@@ -158,6 +159,7 @@ static int main_help(int line) {
 		" -n, -nn      do not load RBin info (-nn only load bin structures)\n"
 		" -N           do not load user settings and scripts\n"
 		" -q           quiet mode (no prompt) and quit after -i\n"
+		" -qq          quit after running all -c and -i\n"
 		" -Q           quiet mode (no prompt) and quit faster (quickLeak=true)\n"
 		" -p [prj]     use project, list if no arg, load if no file\n"
 		" -P [file]    apply rapatch file and quit\n"
@@ -506,7 +508,15 @@ R_API int r_main_radare2(int argc, char **argv) {
 		LISTS_FREE ();
 		return main_help (1);
 	}
-	r_core_init (&r);
+	r_core_init (&r); // TODO: use r_core_new() for simplicity
+	r.r_main_radare2 = r_main_radare2;
+	r.r_main_radiff2 = r_main_radiff2;
+	r.r_main_rafind2 = r_main_rafind2;
+	r.r_main_rabin2 = r_main_rabin2;
+	r.r_main_ragg2 = r_main_ragg2;
+	r.r_main_rasm2 = r_main_rasm2;
+	r.r_main_rax2 = r_main_rax2;
+
 	r_core_task_sync_begin (&r);
 	if (argc == 2 && !strcmp (argv[1], "-p")) {
 		r_core_project_list (&r, 0);
@@ -596,7 +606,7 @@ R_API int r_main_radare2(int argc, char **argv) {
 			if (!strcmp (r_optarg, "q")) {
 				r_core_cmd0 (&r, "eq");
 			} else {
-				r_config_eval (r.config, r_optarg);
+				r_config_eval (r.config, r_optarg, false);
 				r_list_append (evals, r_optarg);
 			}
 			break;
@@ -667,6 +677,9 @@ R_API int r_main_radare2(int argc, char **argv) {
 			r_config_set (r.config, "scr.interactive", "false");
 			r_config_set (r.config, "scr.prompt", "false");
 			r_config_set (r.config, "cfg.fortunes", "false");
+			if (quiet) {
+				forcequit = true;
+			}
 			quiet = true;
 			break;
 		case 'r':
@@ -1263,7 +1276,7 @@ R_API int r_main_radare2(int argc, char **argv) {
 			r_core_seek (&r, mapaddr, 1);
 		}
 		r_list_foreach (evals, iter, cmdn) {
-			r_config_eval (r.config, cmdn);
+			r_config_eval (r.config, cmdn, false);
 			r_cons_flush ();
 		}
 #if 0
@@ -1344,7 +1357,7 @@ R_API int r_main_radare2(int argc, char **argv) {
 		}
 
 		r_list_foreach (evals, iter, cmdn) {
-			r_config_eval (r.config, cmdn);
+			r_config_eval (r.config, cmdn, false);
 			r_cons_flush ();
 		}
 
@@ -1412,6 +1425,9 @@ R_API int r_main_radare2(int argc, char **argv) {
 	r_list_free (evals);
 	r_list_free (files);
 	cmds = evals = files = NULL;
+	if (forcequit) {
+		ret = 1;
+	}
 	if (ret) {
 		ret = 0;
 		goto beach;

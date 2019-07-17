@@ -20,6 +20,7 @@ extern "C" {
 #include <r_util/r_file.h>
 #include <r_vector.h>
 #include <sdb.h>
+#include <sdb/ht_up.h>
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -72,6 +73,8 @@ typedef struct r_cons_grep_t {
 	int counter;
 	bool charCounter;
 	int less;
+	bool hud;
+	bool human;
 	int json;
 	char *json_path;
 	int range_line;
@@ -84,6 +87,8 @@ typedef struct r_cons_grep_t {
 	int tokens[R_CONS_GREP_TOKENS];
 	int tokens_used;
 	int amp;
+	int zoom;
+	int zoomy; // if set then its scaled unproportionally
 	int neg;
 	int begin;
 	int end;
@@ -157,7 +162,12 @@ enum {
 #endif
 
 enum { ALPHA_RESET = 0x00, ALPHA_FG = 0x01, ALPHA_BG = 0x02, ALPHA_FGBG = 0x03 };
-enum { R_CONS_ATTR_BOLD = 1 << 1 };
+enum { R_CONS_ATTR_BOLD = 1u << 1,
+       R_CONS_ATTR_DIM = 1u << 2,
+       R_CONS_ATTR_ITALIC = 1u << 3,
+       R_CONS_ATTR_UNDERLINE = 1u << 4,
+       R_CONS_ATTR_BLINK = 1u << 5
+};
 
 typedef struct rcolor_t {
 	// bold, italic, underline, ...
@@ -169,6 +179,7 @@ typedef struct rcolor_t {
 	ut8 r2; // Background color
 	ut8 g2; // Only used when a &= ALPHA_FGBG
 	ut8 b2;
+	st8 id16; // Mapping to 16-color table
 } RColor;
 
 typedef struct r_cons_palette_t {
@@ -319,11 +330,6 @@ typedef struct r_cons_printable_palette_t {
 typedef void (*RConsEvent)(void *);
 
 #define CONS_MAX_ATTR_SZ 16
-typedef struct r_cons_canvas_attr_t {
-	//TODO add support for 256 colors.
-	int loc;
-	const char * a;
-} RConsCanvasAttr;
 
 typedef struct r_cons_canvas_t {
 	int w;
@@ -333,9 +339,8 @@ typedef struct r_cons_canvas_t {
 	char **b;
 	int *blen;
 	int *bsize;
-	const char * attr;//The current attr (inserted on each write)
-	RConsCanvasAttr * attrs;// all the different attributes
-	int attrslen;
+	const char *attr; //The current attr (inserted on each write)
+	HtUP *attrs; // all the different attributes <key: unsigned int loc, const char *attr>
 	int sx; // scrollx
 	int sy; // scrolly
 	int color;
@@ -494,6 +499,9 @@ typedef struct r_cons_t {
 	bool use_tts;
 	bool filter;
 	char* (*rgbstr)(char *str, size_t sz, ut64 addr);
+	bool click_set;
+	int click_x;
+	int click_y;
 	// TODO: move into instance? + avoid unnecessary copies
 } RCons;
 
@@ -544,7 +552,7 @@ typedef struct r_cons_t {
       */
 #define Color_RESET_TERMINAL  "\x1b" "c\x1b(K\x1b[0m\x1b[J\x1b[?25h"
 #define Color_RESET      "\x1b[0m" /* reset all */
-#define Color_RESET_NOBG "\x1b[22;24;25;27;28;39m"  /* Reset everything except background */
+#define Color_RESET_NOBG "\x1b[27;22;24;25;28;39m"  /* Reset everything except background (order is important) */
 #define Color_RESET_BG   "\x1b[49m"
 #define Color_RESET_ALL  "\x1b[0m\x1b[49m"
 #define Color_BLACK      "\x1b[30m"
@@ -566,41 +574,101 @@ typedef struct r_cons_t {
 #define Color_GRAY       "\x1b[90m"
 #define Color_BGGRAY     "\x1b[100m"
 /* bright colors */
-#define Color_BBLACK    "\x1b[1;30m"
-#define Color_BRED      "\x1b[1;31m"
-#define Color_BBGRED    "\x1b[1;41m"
-#define Color_BWHITE    "\x1b[1;37m"
-#define Color_BGREEN    "\x1b[1;32m"
-#define Color_BMAGENTA  "\x1b[1;35m"
-#define Color_BYELLOW   "\x1b[1;33m"
-#define Color_BCYAN     "\x1b[1;36m"
-#define Color_BBLUE     "\x1b[1;34m"
-#define Color_BGRAY     "\x1b[1;38m"
+#define Color_BBLACK     Color_GRAY
+#define Color_BBGBLACK   Color_BGGRAY
+#define Color_BRED       "\x1b[91m"
+#define Color_BBGRED     "\x1b[101m"
+#define Color_BWHITE     "\x1b[97m"
+#define Color_BBGWHITE   "\x1b[107m"
+#define Color_BGREEN     "\x1b[92m"
+#define Color_BBGGREEN   "\x1b[102m"
+#define Color_BMAGENTA   "\x1b[95m"
+#define Color_BBGMAGENTA "\x1b[105m"
+#define Color_BYELLOW    "\x1b[93m"
+#define Color_BBGYELLOW  "\x1b[103m"
+#define Color_BCYAN      "\x1b[96m"
+#define Color_BBGCYAN    "\x1b[106m"
+#define Color_BBLUE      "\x1b[94m"
+#define Color_BBGBLUE    "\x1b[104m"
 
 #ifdef _MSC_VER
-#define RCOLOR(a, r, g, b, bgr, bgg, bgb) {0, a, r, g, b, bgr, bgg, bgb}
+#define RCOLOR(a, r, g, b, bgr, bgg, bgb, id16) {0, a, r, g, b, bgr, bgg, bgb, id16}
 #else
-#define RCOLOR(a, r, g, b, bgr, bgg, bgb) (RColor) {0, a, r, g, b, bgr, bgg, bgb}
+#define RCOLOR(a, r, g, b, bgr, bgg, bgb, id16) (RColor) {0, a, r, g, b, bgr, bgg, bgb, id16}
 #endif
-#define RColor_NULL      RCOLOR(0x00,     0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-#define RColor_BLACK     RCOLOR(ALPHA_FG, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-#define RColor_BGBLACK   RCOLOR(ALPHA_BG, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-#define RColor_RED       RCOLOR(ALPHA_FG, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00)
-#define RColor_BGRED     RCOLOR(ALPHA_BG, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00)
-#define RColor_WHITE     RCOLOR(ALPHA_FG, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00)
-#define RColor_BGWHITE   RCOLOR(ALPHA_BG, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00)
-#define RColor_GREEN     RCOLOR(ALPHA_FG, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00)
-#define RColor_BGGREEN   RCOLOR(ALPHA_BG, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00)
-#define RColor_MAGENTA   RCOLOR(ALPHA_FG, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00)
-#define RColor_BGMAGENTA RCOLOR(ALPHA_BG, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00)
-#define RColor_YELLOW    RCOLOR(ALPHA_FG, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00)
-#define RColor_BGYELLOW  RCOLOR(ALPHA_BG, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00)
-#define RColor_CYAN      RCOLOR(ALPHA_FG, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00)
-#define RColor_BGCYAN    RCOLOR(ALPHA_BG, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00)
-#define RColor_BLUE      RCOLOR(ALPHA_FG, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00)
-#define RColor_BGBLUE    RCOLOR(ALPHA_BG, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00)
-#define RColor_GRAY      RCOLOR(ALPHA_FG, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00)
-#define RColor_BGGRAY    RCOLOR(ALPHA_BG, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00)
+#define RColor_NULL       RCOLOR(0x00,     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, -1)
+#if __WINDOWS__
+#define RColor_BLACK      RCOLOR(ALPHA_FG, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0)
+#define RColor_BGBLACK    RCOLOR(ALPHA_BG, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  0)
+#define RColor_RED        RCOLOR(ALPHA_FG, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,  1)
+#define RColor_BGRED      RCOLOR(ALPHA_BG, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,  1)
+#define RColor_WHITE      RCOLOR(ALPHA_FG, 0xc0, 0xc0, 0xc0, 0x00, 0x00, 0x00,  7)
+#define RColor_BGWHITE    RCOLOR(ALPHA_BG, 0xc0, 0xc0, 0xc0, 0x00, 0x00, 0x00,  7)
+#define RColor_GREEN      RCOLOR(ALPHA_FG, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00,  2)
+#define RColor_BGGREEN    RCOLOR(ALPHA_BG, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00,  2)
+#define RColor_MAGENTA    RCOLOR(ALPHA_FG, 0x80, 0x00, 0x80, 0x00, 0x00, 0x00,  5)
+#define RColor_BGMAGENTA  RCOLOR(ALPHA_BG, 0x80, 0x00, 0x80, 0x00, 0x00, 0x00,  5)
+#define RColor_YELLOW     RCOLOR(ALPHA_FG, 0x80, 0x80, 0x00, 0x00, 0x00, 0x00,  3)
+#define RColor_BGYELLOW   RCOLOR(ALPHA_BG, 0x80, 0x80, 0x00, 0x00, 0x00, 0x00,  3)
+#define RColor_CYAN       RCOLOR(ALPHA_FG, 0x00, 0x80, 0x80, 0x00, 0x00, 0x00,  6)
+#define RColor_BGCYAN     RCOLOR(ALPHA_BG, 0x00, 0x80, 0x80, 0x00, 0x00, 0x00,  6)
+#define RColor_BLUE       RCOLOR(ALPHA_FG, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,  4)
+#define RColor_BGBLUE     RCOLOR(ALPHA_BG, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00,  4)
+#define RColor_BBLACK     RCOLOR(ALPHA_FG, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00,  8)
+#define RColor_BBGBLACK   RCOLOR(ALPHA_BG, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00,  8)
+#define RColor_BRED       RCOLOR(ALPHA_FG, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,  9)
+#define RColor_BBGRED     RCOLOR(ALPHA_BG, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,  9)
+#define RColor_BWHITE     RCOLOR(ALPHA_FG, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 15)
+#define RColor_BBGWHITE   RCOLOR(ALPHA_BG, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 15)
+#define RColor_BGREEN     RCOLOR(ALPHA_FG, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 10)
+#define RColor_BBGGREEN   RCOLOR(ALPHA_BG, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 10)
+#define RColor_BMAGENTA   RCOLOR(ALPHA_FG, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 13)
+#define RColor_BBGMAGENTA RCOLOR(ALPHA_BG, 0xff, 0x00, 0xff, 0x00, 0x00, 0x00, 13)
+#define RColor_BYELLOW    RCOLOR(ALPHA_FG, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 11)
+#define RColor_BBGYELLOW  RCOLOR(ALPHA_BG, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 11)
+#define RColor_BCYAN      RCOLOR(ALPHA_FG, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 14)
+#define RColor_BBGCYAN    RCOLOR(ALPHA_BG, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 14)
+#define RColor_BBLUE      RCOLOR(ALPHA_FG, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 12)
+#define RColor_BBGBLUE    RCOLOR(ALPHA_BG, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 12)
+#else
+// Campbell (https://devblogs.microsoft.com/commandline/updating-the-windows-console-colors/).
+// Not used on Windows since cmd.exe doesn't support bold (needed for easier
+// differentiation between normal and bright color text for some colors).
+#define RColor_BLACK      RCOLOR(ALPHA_FG,  12,  12,  12, 0x00, 0x00, 0x00,  0)
+#define RColor_BGBLACK    RCOLOR(ALPHA_BG,  12,  12,  12, 0x00, 0x00, 0x00,  0)
+#define RColor_RED        RCOLOR(ALPHA_FG, 197,  15,  31, 0x00, 0x00, 0x00,  1)
+#define RColor_BGRED      RCOLOR(ALPHA_BG, 197,  15,  31, 0x00, 0x00, 0x00,  1)
+#define RColor_WHITE      RCOLOR(ALPHA_FG, 204, 204, 204, 0x00, 0x00, 0x00,  7)
+#define RColor_BGWHITE    RCOLOR(ALPHA_BG, 204, 204, 204, 0x00, 0x00, 0x00,  7)
+#define RColor_GREEN      RCOLOR(ALPHA_FG,  19, 161,  14, 0x00, 0x00, 0x00,  2)
+#define RColor_BGGREEN    RCOLOR(ALPHA_BG,  19, 161,  14, 0x00, 0x00, 0x00,  2)
+#define RColor_MAGENTA    RCOLOR(ALPHA_FG, 136,  23, 152, 0x00, 0x00, 0x00,  5)
+#define RColor_BGMAGENTA  RCOLOR(ALPHA_BG, 136,  23, 152, 0x00, 0x00, 0x00,  5)
+#define RColor_YELLOW     RCOLOR(ALPHA_FG, 193, 156,   0, 0x00, 0x00, 0x00,  3)
+#define RColor_BGYELLOW   RCOLOR(ALPHA_BG, 193, 156,   0, 0x00, 0x00, 0x00,  3)
+#define RColor_CYAN       RCOLOR(ALPHA_FG,  58, 150, 221, 0x00, 0x00, 0x00,  6)
+#define RColor_BGCYAN     RCOLOR(ALPHA_BG,  58, 150, 221, 0x00, 0x00, 0x00,  6)
+#define RColor_BLUE       RCOLOR(ALPHA_FG,   0,  55, 218, 0x00, 0x00, 0x00,  4)
+#define RColor_BGBLUE     RCOLOR(ALPHA_BG,   0,  55, 218, 0x00, 0x00, 0x00,  4)
+#define RColor_BBLACK     RCOLOR(ALPHA_FG, 118, 118, 118, 0x00, 0x00, 0x00,  8)
+#define RColor_BBGBLACK   RCOLOR(ALPHA_BG, 118, 118, 118, 0x00, 0x00, 0x00,  8)
+#define RColor_BRED       RCOLOR(ALPHA_FG, 231,  72,  86, 0x00, 0x00, 0x00,  9)
+#define RColor_BBGRED     RCOLOR(ALPHA_BG, 231,  72,  86, 0x00, 0x00, 0x00,  9)
+#define RColor_BWHITE     RCOLOR(ALPHA_FG, 242, 242, 242, 0x00, 0x00, 0x00, 15)
+#define RColor_BBGWHITE   RCOLOR(ALPHA_BG, 242, 242, 242, 0x00, 0x00, 0x00, 15)
+#define RColor_BGREEN     RCOLOR(ALPHA_FG,  22, 198,  12, 0x00, 0x00, 0x00, 10)
+#define RColor_BBGGREEN   RCOLOR(ALPHA_BG,  22, 198,  12, 0x00, 0x00, 0x00, 10)
+#define RColor_BMAGENTA   RCOLOR(ALPHA_FG, 180,   0, 158, 0x00, 0x00, 0x00, 13)
+#define RColor_BBGMAGENTA RCOLOR(ALPHA_BG, 180,   0, 158, 0x00, 0x00, 0x00, 13)
+#define RColor_BYELLOW    RCOLOR(ALPHA_FG, 249, 241, 165, 0x00, 0x00, 0x00, 11)
+#define RColor_BBGYELLOW  RCOLOR(ALPHA_BG, 249, 241, 165, 0x00, 0x00, 0x00, 11)
+#define RColor_BCYAN      RCOLOR(ALPHA_FG,  97, 214, 214, 0x00, 0x00, 0x00, 14)
+#define RColor_BBGCYAN    RCOLOR(ALPHA_BG,  97, 214, 214, 0x00, 0x00, 0x00, 14)
+#define RColor_BBLUE      RCOLOR(ALPHA_FG,  59, 120, 255, 0x00, 0x00, 0x00, 12)
+#define RColor_BBGBLUE    RCOLOR(ALPHA_BG,  59, 120, 255, 0x00, 0x00, 0x00, 12)
+#endif
+#define RColor_GRAY       RColor_BBLACK
+#define RColor_BGGRAY     RColor_BBGBLACK
 
 #define Colors_PLAIN { \
 	Color_BLACK, Color_RED, Color_WHITE, \
@@ -678,6 +746,7 @@ typedef struct r_cons_canvas_line_style_t {
 
 
 #ifdef R_API
+R_API void r_cons_image(const ut8 *buf, int bufsz, int width, int mode);
 R_API RConsCanvas* r_cons_canvas_new(int w, int h);
 R_API void r_cons_canvas_free(RConsCanvas *c);
 R_API void r_cons_canvas_clear(RConsCanvas *c);
@@ -689,6 +758,7 @@ R_API void r_cons_canvas_write(RConsCanvas *c, const char *_s);
 R_API bool r_cons_canvas_gotoxy(RConsCanvas *c, int x, int y);
 R_API void r_cons_canvas_goto_write(RConsCanvas *c,int x,int y, const char * s);
 R_API void r_cons_canvas_box(RConsCanvas *c, int x, int y, int w, int h, const char *color);
+R_API void r_cons_canvas_circle(RConsCanvas *c, int x, int y, int w, int h, const char *color);
 R_API void r_cons_canvas_line(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style);
 R_API void r_cons_canvas_line_diagonal(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style);
 R_API void r_cons_canvas_line_square(RConsCanvas *c, int x, int y, int x2, int y2, RCanvasLineStyle *style);
@@ -701,6 +771,8 @@ R_API RCons *r_cons_singleton(void);
 R_API RCons *r_cons_free(void);
 R_API char *r_cons_lastline(int *size);
 R_API char *r_cons_lastline_utf8_ansi_len(int *len);
+R_API void r_cons_set_click(int x, int y);
+R_API bool r_cons_get_click(int *x, int *y);
 
 typedef void (*RConsBreak)(void *);
 R_API void r_cons_break_end(void);
@@ -717,10 +789,13 @@ R_API int r_cons_pipe_open(const char *file, int fdn, int append);
 R_API void r_cons_pipe_close(int fd);
 
 #if __WINDOWS__
-R_API int r_cons_get_ansicon();
+R_API bool r_cons_is_ansicon(void);
+R_API void r_cons_w32_clear(void);
 R_API void r_cons_w32_gotoxy(int fd, int x, int y);
 R_API int r_cons_w32_print(const ut8 *ptr, int len, bool vmode);
 R_API int r_cons_win_printf(bool vmode, const char *fmt, ...);
+R_API int r_cons_win_eprintf(bool vmode, const char *fmt, ...);
+R_API int r_cons_win_vhprintf(DWORD hdl, bool vmode, const char *fmt, va_list ap);
 #endif
 
 R_API void r_cons_push(void);
@@ -752,7 +827,7 @@ R_API void r_cons_fill_line(void);
 R_API void r_cons_stdout_open(const char *file, int append);
 R_API int  r_cons_stdout_set_fd(int fd);
 R_API void r_cons_gotoxy(int x, int y);
-R_API int r_cons_get_cur_line ();
+R_API int r_cons_get_cur_line(void);
 R_API void r_cons_show_cursor(int cursor);
 R_API char *r_cons_swap_ground(const char *col);
 R_API bool r_cons_drop(int n);
@@ -829,13 +904,13 @@ R_API char *r_cons_hud_string(const char *s);
 R_API char *r_cons_hud_file(const char *f);
 
 R_API const char *r_cons_get_buffer(void);
-R_API int r_cons_get_buffer_len();
+R_API int r_cons_get_buffer_len(void);
 R_API void r_cons_grep_help(void);
 R_API void r_cons_grep_parsecmd(char *cmd, const char *quotestr);
 R_API char * r_cons_grep_strip(char *cmd, const char *quotestr);
 R_API void r_cons_grep_process(char * grep);
 R_API int r_cons_grep_line(char *buf, int len); // must be static
-R_API void r_cons_grepbuf();
+R_API void r_cons_grepbuf(void);
 
 R_API void r_cons_rgb(ut8 r, ut8 g, ut8 b, ut8 a);
 R_API void r_cons_rgb_fgbg(ut8 r, ut8 g, ut8 b, ut8 R, ut8 G, ut8 B);
@@ -934,6 +1009,7 @@ struct r_line_t {
 	int (*hist_down)(void *user);
 	char *contents;
 	bool zerosep;
+	bool vi_mode;
 	RLinePromptType prompt_type;
 	int offset_hist_index;
 	int file_hist_index;
@@ -981,11 +1057,13 @@ R_API void r_line_completion_clear(RLineCompletion *completion);
 #endif
 
 typedef int (*RPanelsMenuCallback)(void *user);
+typedef char *(*RPanelsMenuGetName)(R_NULLABLE void *user, char *base_name);
 typedef struct r_panels_menu_item {
 	int n_sub, selectedIndex;
-	const char *name;
+	char *base_name;
 	struct r_panels_menu_item **sub;
 	RPanelsMenuCallback cb;
+	RPanelsMenuGetName get_name_cb;
 	RPanel *p;
 } RPanelsMenuItem;
 
@@ -1038,8 +1116,8 @@ typedef struct r_panels_t {
 	bool autoUpdate;
 	RPanelsMenu *panelsMenu;
 	Sdb *db;
-	Sdb *del_db;
 	Sdb *rotate_db;
+	Sdb *almighty_db;
 	HtPP *mht;
 	RPanelsMode mode;
 	RPanelsFun fun;
@@ -1047,12 +1125,23 @@ typedef struct r_panels_t {
 	RPanelsLayout layout;
 	RList *snows;
 	char *name;
+	ut64 addr;
 } RPanels;
+
+typedef enum {
+	DEFAULT,
+	ROTATE,
+	DEL,
+	QUIT,
+} RPanelsRootState;
 
 typedef struct r_panels_root_t {
 	int n_panels;
 	int cur_panels;
+	Sdb *pdc_caches;
+	Sdb *cur_pdc_cache;
 	RPanels **panels;
+	RPanelsRootState root_state;
 } RPanelsRoot;
 
 #ifdef __cplusplus

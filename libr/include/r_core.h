@@ -3,6 +3,7 @@
 #ifndef R2_CORE_H
 #define R2_CORE_H
 
+#include <r_main.h>
 #include "r_socket.h"
 #include "r_types.h"
 #include "r_magic.h"
@@ -116,6 +117,11 @@ typedef struct r_core_undo_t {
 	ut64 offset;
 } RCoreUndo;
 
+typedef enum {
+	AUTOCOMPLETE_DEFAULT,
+	AUTOCOMPLETE_MS
+} RAutocompleteType;
+
 typedef struct {
 	ut64 addr;
 	const char *glob;
@@ -135,6 +141,7 @@ typedef struct r_core_file_t {
 	const struct r_core_t *core;
 	ut8 alive;
 } RCoreFile;
+
 
 typedef struct r_core_times_t {
 	ut64 loadlibs_init_time;
@@ -166,6 +173,8 @@ typedef enum r_core_autocomplete_types_t {
 	R_CORE_AUTOCMPLT_FILE,
 	R_CORE_AUTOCMPLT_THME,
 	R_CORE_AUTOCMPLT_OPTN,
+	R_CORE_AUTOCMPLT_MS,
+	R_CORE_AUTOCMPLT_SDB,
 // --- left as last always
 	R_CORE_AUTOCMPLT_END,
 } RCoreAutocompleteType;
@@ -255,6 +264,7 @@ typedef struct r_core_t {
 	RFlag *flags;
 	RSearch *search;
 	RFS *fs;
+	RFSShell *rfs;
 	REgg *egg;
 	RCoreLog *log;
 	RAGraph *graph;
@@ -317,12 +327,41 @@ typedef struct r_core_t {
 	int sync_index; // used for http.sync and T=
 	struct r_core_t *c2;
 	RCoreAutocomplete *autocomplete;
+	int autocomplete_type;
 	REvent *ev;
 	RList *gadgets;
 	bool scr_gadgets;
 	bool log_events; // core.c:cb_event_handler : log actions from events if cfg.log.events is set
 	RList *ropchain;
+
+	RMainCallback r_main_radare2;
+	// int (*r_main_radare2)(int argc, char **argv);
+	int (*r_main_rafind2)(int argc, char **argv);
+	int (*r_main_radiff2)(int argc, char **argv);
+	int (*r_main_rabin2)(int argc, char **argv);
+	int (*r_main_rarun2)(int argc, char **argv);
+	int (*r_main_ragg2)(int argc, char **argv);
+	int (*r_main_rasm2)(int argc, char **argv);
+	int (*r_main_rax2)(int argc, char **argv);
 } RCore;
+
+// maybe move into RAnal
+typedef struct r_core_item_t {
+	const char *type;
+	ut64 addr;
+	ut64 next;
+	ut64 prev;
+	int size;
+	int perm;
+	char *data;
+	char *comment;
+	char *sectname;
+	char *fcnname;
+} RCoreItem;
+
+
+R_API RCoreItem *r_core_item_at (RCore *core, ut64 addr);
+R_API void r_core_item_free (RCoreItem *ci);
 
 R_API int r_core_bind(RCore *core, RCoreBind *bnd);
 
@@ -342,12 +381,13 @@ typedef struct {
 	RInterval vitv;
 	int perm;
 	char *extra;
-} ListInfo;
+} RListInfo;
 
 #ifdef R_API
 //#define r_core_ncast(x) (RCore*)(size_t)(x)
 R_API RList *r_core_list_themes(RCore *core);
 R_API char *r_core_get_theme(void);
+R_API const char *r_core_get_section_name(RCore *core, ut64 addr);
 R_API RCons *r_core_get_cons(RCore *core);
 R_API RBin *r_core_get_bin(RCore *core);
 R_API RConfig *r_core_get_config (RCore *core);
@@ -360,6 +400,7 @@ R_API void r_core_wait(RCore *core);
 R_API RCore *r_core_ncast(ut64 p);
 R_API RCore *r_core_cast(void *p);
 R_API int r_core_config_init(RCore *core);
+R_API void r_core_config_update(RCore *core);
 R_API int r_core_prompt(RCore *core, int sync);
 R_API int r_core_prompt_exec(RCore *core);
 R_API int r_core_lines_initcache (RCore *core, ut64 start_addr, ut64 end_addr);
@@ -440,6 +481,8 @@ R_API void r_core_anal_esil_graph(RCore *core, const char *expr);
 
 R_API void r_core_list_io(RCore *core);
 R_API void r_core_visual_list(RCore *core, RList* list, ut64 seek, ut64 len, int width, int use_color);
+R_API RListInfo *r_listinfo_new (char *name, RInterval pitv, RInterval vitv, int perm, char *extra);
+R_API void r_listinfo_free (RListInfo *info);
 /* visual marks */
 R_API void r_core_visual_mark_seek(RCore *core, ut8 ch);
 R_API void r_core_visual_mark(RCore *core, ut8 ch);
@@ -460,7 +503,6 @@ R_API int r_core_file_set_by_name(RCore *core, const char * name);
 R_API int r_core_file_set_by_file (RCore * core, RCoreFile *cf);
 R_API int r_core_setup_debugger (RCore *r, const char *debugbackend, bool attach);
 
-R_API int r_core_files_free(const RCore *core, RCoreFile *cf);
 R_API void r_core_file_free(RCoreFile *cf);
 R_API RCoreFile *r_core_file_open(RCore *core, const char *file, int flags, ut64 loadaddr);
 R_API RCoreFile *r_core_file_open_many(RCore *r, const char *file, int flags, ut64 loadaddr);
@@ -470,14 +512,13 @@ R_API bool r_core_file_close_fd(RCore *core, int fd);
 R_API bool r_core_file_close_all_but(RCore *core);
 R_API int r_core_file_list(RCore *core, int mode);
 R_API int r_core_file_binlist(RCore *core);
-R_API int r_core_file_bin_raise(RCore *core, ut32 num);
+R_API bool r_core_file_bin_raise(RCore *core, ut32 num);
 R_API int r_core_seek_delta(RCore *core, st64 addr);
 R_API int r_core_extend_at(RCore *core, ut64 addr, int size);
 R_API bool r_core_write_at(RCore *core, ut64 addr, const ut8 *buf, int size);
 R_API int r_core_write_op(RCore *core, const char *arg, char op);
 R_API int r_core_set_file_by_fd (RCore * core, ut64 bin_fd);
 R_API int r_core_set_file_by_name (RBin * bin, const char * name);
-R_API RBinFile * r_core_bin_cur (RCore *core);
 R_API ut32 r_core_file_cur_fd (RCore *core);
 
 R_API void r_core_debug_rr (RCore *core, RReg *reg, int mode);
@@ -615,8 +656,9 @@ R_API int r_core_print_fcn_disasm(RPrint *p, RCore *core, ut64 addr, int l, int 
 R_API int r_core_get_prc_cols(RCore *core);
 R_API int r_core_flag_in_middle(RCore *core, ut64 at, int oplen, int *midflags);
 R_API int r_core_bb_starts_in_middle(RCore *core, ut64 at, int oplen);
-R_API int r_core_file_bin_raise (RCore *core, ut32 binfile_idx);
-//R_API int r_core_bin_bind(RCore *core, RBinFile *bf);
+
+R_API bool r_core_bin_raise (RCore *core, ut32 bfid);
+
 R_API int r_core_bin_set_env (RCore *r, RBinFile *binfile);
 R_API int r_core_bin_set_by_fd (RCore *core, ut64 bin_fd);
 R_API int r_core_bin_set_by_name (RCore *core, const char *name);
@@ -625,8 +667,7 @@ R_API bool r_core_bin_load(RCore *core, const char *file, ut64 baseaddr);
 R_API int r_core_bin_rebase(RCore *core, ut64 baddr);
 R_API void r_core_bin_export_info_rad(RCore *core);
 R_API int r_core_bin_list(RCore *core, int mode);
-R_API int r_core_bin_raise (RCore *core, ut32 binfile_idx, ut32 obj_idx);
-R_API bool r_core_bin_delete (RCore *core, ut32 binfile_idx, ut32 binobj_idx);
+R_API bool r_core_bin_delete (RCore *core, ut32 binfile_idx);
 R_API ut64 r_core_bin_impaddr(RBin *bin, int va, const char *name);
 
 // XXX - this is kinda hacky, maybe there should be a way to
@@ -652,6 +693,7 @@ R_API char *r_core_sysenv_begin(RCore *core, const char *cmd);
 R_API void r_core_sysenv_end(RCore *core, const char *cmd);
 
 R_API void r_core_recover_vars(RCore *core, RAnalFunction *fcn, bool argonly);
+// XXX dupe from r_bin.h
 /* bin.c */
 #define R_CORE_BIN_ACC_STRINGS	0x001
 #define R_CORE_BIN_ACC_INFO	0x002
@@ -678,6 +720,7 @@ R_API void r_core_recover_vars(RCore *core, RAnalFunction *fcn, bool argonly);
 #define R_CORE_BIN_ACC_SEGMENTS 0x400000
 #define R_CORE_BIN_ACC_SOURCE 0x800000
 #define R_CORE_BIN_ACC_HASHES 0x10000000
+#define R_CORE_BIN_ACC_TRYCATCH 0x20000000
 #define R_CORE_BIN_ACC_ALL	0x504FFF
 
 #define R_CORE_PRJ_FLAGS	0x0001
@@ -874,6 +917,7 @@ R_API int r_core_search_value_in_range (RCore *core, RInterval search_itv,
 
 R_API RCoreAutocomplete *r_core_autocomplete_add(RCoreAutocomplete *parent, const char* cmd, int type, bool lock);
 R_API void r_core_autocomplete_free(RCoreAutocomplete *obj);
+R_API void r_core_autocomplete_reload (RCore *core);
 R_API RCoreAutocomplete *r_core_autocomplete_find(RCoreAutocomplete *parent, const char* cmd, bool exact);
 R_API bool r_core_autocomplete_remove(RCoreAutocomplete *parent, const char* cmd);
 

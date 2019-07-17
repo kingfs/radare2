@@ -1274,7 +1274,7 @@ static RList *r_debug_native_map_get (RDebug *dbg) {
 #if __APPLE__
 	list = xnu_dbg_maps (dbg, 0);
 #elif __WINDOWS__
-	list = w32_dbg_maps (dbg); // TODO: moar?
+	list = r_w32_dbg_maps (dbg);
 #else
 #if __sun
 	char path[1024];
@@ -1427,7 +1427,7 @@ static RList *r_debug_native_modules_get (RDebug *dbg) {
 	}
 #endif
 #if __WINDOWS__
-	list = w32_dbg_modules (dbg);
+	list = r_w32_dbg_modules (dbg);
 	if (list && !r_list_empty (list)) {
 		return list;
 	}
@@ -1622,7 +1622,7 @@ static bool ll_arm64_hwbp_set(pid_t pid, ut64 _addr, int size, int wp, ut32 type
 		// error reading regs
 	}
 	memcpy (&dreg_state, iov.iov_base, sizeof (dreg_state));
-	// wp is not honored here i think... we cant have more than one wp for now..
+	// wp is not honored here i think... we can't have more than one wp for now..
 	dreg_state.dbg_regs[0].addr = (uintptr_t)(addr - offset);
 	dreg_state.dbg_regs[0].ctrl = control;
 	iov.iov_base = &dreg_state;
@@ -2131,13 +2131,13 @@ RDebugPlugin r_debug_plugin_native = {
 	.gcore = r_debug_gcore,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_DBG,
 	.data = &r_debug_plugin_native,
 	.version = R2_VERSION
 };
-#endif // CORELIB
+#endif // R2_PLUGIN_INCORE
 
 //#endif
 #else // DEBUGGER

@@ -93,9 +93,9 @@ static void cmd_debug_reg(RCore *core, const char *str);
 #include "cmd_magic.c"
 #include "cmd_mount.c"
 #include "cmd_seek.c"
+#include "cmd_search.c" // defines incDigitBuffer... used by cmd_print
 #include "cmd_print.c"
 #include "cmd_help.c"
-#include "cmd_search.c"
 #include "cmd_colon.c"
 
 static const char *help_msg_dollar[] = {
@@ -264,8 +264,8 @@ static const char *help_msg_y[] = {
 	"y", " 16 0x200", "copy 16 bytes into clipboard from 0x200",
 	"y", " 16 @ 0x200", "copy 16 bytes into clipboard from 0x200",
 	"y!", "", "open cfg.editor to edit the clipboard",
-	"y*", "", "print in r2 commands whats been yanked",
-	"yj", "", "print in JSON commands whats been yanked",
+	"y*", "", "print in r2 commands what's been yanked",
+	"yj", "", "print in JSON commands what's been yanked",
 	"yz", " [len]", "copy nul-terminated string (up to blocksize) into clipboard",
 	"yp", "", "print contents of clipboard",
 	"yq", "", "print contents of clipboard in hexpairs",
@@ -353,6 +353,34 @@ static int r_core_cmd_nullcallback(void *data) {
 	return 1;
 }
 
+static int cmd_uniq(void *data, const char *input) { // "uniq"
+	RCore *core = (RCore *)data;
+	const char *arg = strchr (input, ' ');
+	if (arg) {
+		arg = r_str_trim_ro (arg + 1);
+	}
+	switch (*input) {
+	case '?': // "uniq?"
+		eprintf ("Usage: uniq # uniq to list unique strings in file\n");
+		break;
+	default: // "uniq"
+		if (!arg) {
+			arg = "";
+		}
+		if (r_fs_check (core->fs, arg)) {
+			r_core_cmdf (core, "md %s", arg);
+		} else {
+			char *res = r_syscmd_uniq (arg);
+			if (res) {
+				r_cons_print (res);
+				free (res);
+			}
+		}
+		break;
+	}
+	return 0;
+}
+
 static int cmd_uname(void *data, const char *input) {
 	RCore *core = (RCore *)data;
 	switch (input[0]) {
@@ -405,6 +433,11 @@ static int cmd_uname(void *data, const char *input) {
 		return 1;
 	case 'w': // "uw"
 		r_core_cmdf (data, "wc%s", input + 1);
+		return 1;
+	case 'n': // "un"
+		if (input[1] == 'i' && input[2] == 'q') {
+			cmd_uniq (core, input);
+		}
 		return 1;
 	}
 #if __UNIX__
@@ -753,11 +786,11 @@ static int lang_run_file(RCore *core, RLang *lang, const char *file) {
 	return r_lang_run_file (core->lang, file);
 }
 
-static char *langFromHashbang (RCore *core, const char *file) {
+static char *langFromHashbang(RCore *core, const char *file) {
 	int fd = r_sandbox_open (file, O_RDONLY, 0);
 	if (fd != -1) {
 		char firstLine[128] = {0};
-		int len = r_sandbox_read (fd, (ut8*)firstLine, sizeof (firstLine));
+		int len = r_sandbox_read (fd, (ut8*)firstLine, sizeof (firstLine) - 1);
 		firstLine[len] = 0;
 		if (!strncmp (firstLine, "#!/", 3)) {
 			// I CAN HAS A HASHBANG
@@ -796,7 +829,10 @@ R_API bool r_core_run_script(RCore *core, const char *file) {
 			ret = r_core_cmd_lines (core, out);
 			free (out);
 		}
-	} else if (r_parse_is_c_file (file)) {
+	} else if (r_str_endswith (file, ".c")) {
+		r_core_cmd_strf (core, "#!c %s", file);
+		ret = true;
+	} else if (r_file_is_c (file)) {
 		const char *dir = r_config_get (core->config, "dir.types");
 		char *out = r_parse_c_file (core->anal, file, dir, NULL);
 		if (out) {
@@ -962,6 +998,50 @@ static int cmd_ls(void *data, const char *input) { // "ls"
 	return 0;
 }
 
+static int cmd_join(void *data, const char *input) { // "join"
+	RCore *core = (RCore *)data;
+	const char *tmp = strdup (input);
+	const char *arg1 = strchr (tmp, ' ');
+	if (!arg1) {
+		goto beach;
+	}
+	arg1 = r_str_trim_ro (arg1);
+	char *end = strchr (arg1, ' ');
+	if (!end) {
+		goto beach;
+	}
+	*end = '\0';
+	const char *arg2 = end+1;
+	if (!arg2) {
+		goto beach;
+	}
+	arg2 = r_str_trim_ro (arg2);
+	switch (*input) {
+	case '?': // "join?"
+		goto beach;
+	default: // "join"
+		if (!arg1) {
+			arg1 = "";
+		}
+		if (!arg2) {
+			arg2 = "";
+		}
+		if (!r_fs_check (core->fs, arg1) && !r_fs_check (core->fs, arg2)) {
+			char *res = r_syscmd_join (arg1, arg2);
+			if (res) {
+				r_cons_print (res);
+				free (res);
+			}
+			R_FREE (tmp);
+		}
+		break;
+	}
+	return 0;
+beach:
+	eprintf ("Usage: join [file1] [file2] # join the contents of the two files\n");
+	return 0;
+}
+
 static int cmd_stdin(void *data, const char *input) {
 	RCore *core = (RCore *)data;
 	if (input[0] == '?') {
@@ -1109,7 +1189,7 @@ static int cmd_interpret(void *data, const char *input) {
 	return 0;
 }
 
-static int callback_foreach_kv (void *user, const char *k, const char *v) {
+static int callback_foreach_kv(void *user, const char *k, const char *v) {
 	r_cons_printf ("%s=%s\n", k, v);
 	return 1;
 }
@@ -1400,19 +1480,54 @@ static int cmd_bsize(void *data, const char *input) {
 	return 0;
 }
 
-static int cmd_r2cmd(RCore *core, const char *input) {
-	const char *r2cmds[] = {
-		"rax2", "r2pm", "rasm2", "rabin2", "rahash2", "rafind2", "rarun2", "ragg2",
-		NULL
-	};
-	int i;
-	for (i = 0; r2cmds[i]; i++) {
-		if (r_str_startswith (input, r2cmds[i])) {
-			r_sys_cmdf ("r%s", input);
-			return true;
+static int __runMain(RMainCallback cb, const char *arg) {
+	char *a = r_str_trim_dup (arg);
+	int argc = 0;
+	char **args = r_str_argv (a, &argc);
+	int res = cb (argc, args);
+	free (args);
+	free (a);
+	return res;
+}
+
+static bool cmd_r2cmd(RCore *core, const char *_input) {
+	char *input = r_str_newf ("r%s", _input);
+	int rc = 0;
+	if (r_str_startswith (input, "rax2")) {
+		rc = __runMain (core->r_main_rax2, input);
+	} else if (r_str_startswith (input, "radare2")) {
+		r_sys_cmdf ("%s", input);
+		// rc = __runMain (core->r_main_radare2, input);
+	} else if (r_str_startswith (input, "rasm2")) {
+		r_sys_cmdf ("%s", input);
+		// rc = __runMain (core->r_main_rasm2, input);
+	} else if (r_str_startswith (input, "rabin2")) {
+		r_sys_cmdf ("%s", input);
+		// rc = __runMain (core->r_main_rabin2, input);
+	} else if (r_str_startswith (input, "ragg2")) {
+		r_sys_cmdf ("%s", input);
+		// rc = __runMain (core->r_main_ragg2, input);
+	} else if (r_str_startswith (input, "r2pm")) {
+		r_sys_cmdf ("%s", input);
+		// rc = __runMain (core->r_main_r2pm, input);
+	} else if (r_str_startswith (input, "radiff2")) {
+		rc = __runMain (core->r_main_radiff2, input);
+	} else {
+		const char *r2cmds[] = {
+			"rax2", "r2pm", "rasm2", "rabin2", "rahash2", "rafind2", "rarun2", "ragg2", "radare2", "r2", NULL
+		};
+		int i;
+		for (i = 0; r2cmds[i]; i++) {
+			if (r_str_startswith (input, r2cmds[i])) {
+				free (input);
+				return true;
+			}
 		}
+		return false;
 	}
-	return false;
+	free (input);
+	core->num->value = rc;
+	return true;
 }
 
 static int cmd_resize(void *data, const char *input) {
@@ -1427,7 +1542,12 @@ static int cmd_resize(void *data, const char *input) {
 
 	ut64 oldsize = (core->file) ? r_io_fd_size (core->io, core->file->fd): 0;
 	switch (*input) {
-	case '2': // "r2"
+	case 'a': // "r..."
+		if (r_str_startswith (input, "adare2")) {
+			__runMain (core->r_main_radare2, input - 1); 
+		}
+		return true;
+	case '2': // "r2" // XXX should be handled already in cmd_r2cmd()
 		// TODO: use argv[0] instead of 'radare2'
 		r_sys_cmdf ("radare%s", input);
 		return true;
@@ -1669,6 +1789,8 @@ static struct autocomplete_flag_map_t {
 	{ "$file", "hints file paths", R_CORE_AUTOCMPLT_FILE },
 	{ "$thme", "shows known themes hints", R_CORE_AUTOCMPLT_THME },
 	{ "$optn", "allows the selection for multiple options", R_CORE_AUTOCMPLT_OPTN },
+	{ "$ms", "shows mount hints", R_CORE_AUTOCMPLT_MS},
+	{ "$sdb", "shows sdb hints", R_CORE_AUTOCMPLT_SDB},
 	{ NULL, NULL, 0 }
 };
 
@@ -1766,6 +1888,9 @@ static void cmd_autocomplete(RCore *core, const char *input) {
 				if (type != R_CORE_AUTOCMPLT_END && !b->locked && !b->n_subcmds) {
 					b->type = type;
 				} else if (b->locked || b->n_subcmds) {
+					if (!b->cmd) {
+						return;
+					}
 					eprintf ("Changing type of '%s' is forbidden.\n", b->cmd);
 				}
 			} else {
@@ -1854,6 +1979,17 @@ static int cmd_system(void *data, const char *input) {
 	case '?': //!?
 		cmd_help_exclamation (core);
 		break;
+	case '*':
+		// TODO: use the api
+		{
+		char *cmd = r_str_trim_dup (input + 1);
+		cmd = r_str_replace (cmd, " ", "\\ ", true);
+		cmd = r_str_replace (cmd, "\\ ", " ", false);
+		cmd = r_str_replace (cmd, "\"", "'", false);
+		ret = r_core_cmdf (core, "\"#!pipe %s\"", cmd);
+		free (cmd);
+		}
+		break;
 	default:
 		n = atoi (input);
 		if (*input == '0' || n > 0) {
@@ -1888,6 +2024,8 @@ static void r_w32_cmd_pipe(RCore *core, char *radare_cmd, char *shell_cmd) {
 	int fd_out = -1, cons_out = -1;
 	char *_shell_cmd = NULL;
 	LPTSTR _shell_cmd_ = NULL;
+	DWORD mode;
+	GetConsoleMode (GetStdHandle (STD_OUTPUT_HANDLE), &mode);
 
 	sa.nLength = sizeof (SECURITY_ATTRIBUTES);
 	sa.bInheritHandle = TRUE;
@@ -1909,9 +2047,14 @@ static void r_w32_cmd_pipe(RCore *core, char *radare_cmd, char *shell_cmd) {
 	while (*_shell_cmd && isspace ((ut8)*_shell_cmd)) {
 		_shell_cmd++;
 	}
+	char *tmp = r_str_newf ("/Q /c \"%s\"", shell_cmd);
+	if (!tmp) {
+		goto err_r_w32_cmd_pipe;
+	}
+	_shell_cmd = tmp;
 	_shell_cmd_ = r_sys_conv_utf8_to_win (_shell_cmd);
 	// exec windows process
-	if (!CreateProcess (NULL, _shell_cmd_, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+	if (!CreateProcess (TEXT ("C:\\Windows\\System32\\cmd.exe"), _shell_cmd_, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
 		r_sys_perror ("r_w32_cmd_pipe/CreateProcess");
 		goto err_r_w32_cmd_pipe;
 	}
@@ -1949,7 +2092,9 @@ err_r_w32_cmd_pipe:
 		dup2 (cons_out, 1);
 		close (cons_out);
 	}
+	free (tmp);
 	free (_shell_cmd_);
+	SetConsoleMode (GetStdHandle (STD_OUTPUT_HANDLE), mode);
 }
 #endif
 
@@ -2140,7 +2285,7 @@ static int r_core_cmd_subst(RCore *core, char *cmd) {
 	if (rep < 1) {
 		rep = 1;
 	}
-	// XXX if output is a pipe then we dont want to be interactive
+	// XXX if output is a pipe then we don't want to be interactive
 	if (rep > 1 && r_sandbox_enable (0)) {
 		eprintf ("Command repeat sugar disabled in sandbox mode (%s)\n", cmd);
 		goto beach;
@@ -2235,10 +2380,9 @@ static void tmpenvs_free(void *item) {
 }
 
 static bool set_tmp_arch(RCore *core, char *arch, char **tmparch) {
-	if (tmparch == NULL ) {
+	if (!tmparch) {
 		eprintf ("tmparch should be set\n");
 	}
-
 	*tmparch = strdup (r_config_get (core->config, "asm.arch"));
 	r_config_set (core->config, "asm.arch", arch);
 	core->fixedarch = true;
@@ -2246,10 +2390,9 @@ static bool set_tmp_arch(RCore *core, char *arch, char **tmparch) {
 }
 
 static bool set_tmp_bits(RCore *core, int bits, char **tmpbits) {
-	if (tmpbits == NULL) {
+	if (!tmpbits) {
 		eprintf ("tmpbits should be set\n");
 	}
-
 	*tmpbits = strdup (r_config_get (core->config, "asm.bits"));
 	r_config_set_i (core->config, "asm.bits", bits);
 	core->fixedbits = true;
@@ -3330,7 +3473,7 @@ static bool exec_command_on_flag(RFlagItem *flg, void *u) {
 	return true;
 }
 
-static void foreach_pairs (RCore *core, const char *cmd, const char *each) {
+static void foreach_pairs(RCore *core, const char *cmd, const char *each) {
 	const char *arg;
 	int pair = 0;
 	for (arg = each ; ; ) {
@@ -3547,7 +3690,7 @@ R_API int r_core_cmd_foreach3(RCore *core, const char *cmd, char *each) { // "@@
 	case 'f': // flags
 		{
 		// TODO: honor ^C
-			char *glob = filter? r_str_trim (strdup (filter)): NULL;
+			char *glob = filter? r_str_trim_dup (filter): NULL;
 			ut64 off = core->offset;
 			ut64 obs = core->blocksize;
 			struct exec_command_t u = { .core = core, .cmd = cmd };
@@ -3601,7 +3744,7 @@ R_API int r_core_cmd_foreach3(RCore *core, const char *cmd, char *each) { // "@@
 	return 0;
 }
 
-static void foreachOffset (RCore *core, const char *_cmd, const char *each) {
+static void foreachOffset(RCore *core, const char *_cmd, const char *each) {
 	char *cmd = strdup (_cmd);
 	char *nextLine = NULL;
 	ut64 addr;
@@ -3909,7 +4052,7 @@ R_API int r_core_cmd_foreach(RCore *core, const char *cmd, char *each) {
 	case '.': // "@@."
 		if (each[1] == '(') {
 			char cmd2[1024];
-			// XXX whats this 999 ?
+			// XXX what's this 999 ?
 			i = 0;
 			for (core->rcmd->macro.counter = 0; i < 999; core->rcmd->macro.counter++) {
 				if (r_cons_is_breaked ()) {
@@ -4501,6 +4644,7 @@ R_API void r_core_cmd_init(RCore *core) {
 		{"info",     "get file info", cmd_info, cmd_info_init},
 		{"kuery",    "perform sdb query", cmd_kuery},
 		{"l",       "list files and directories", cmd_ls},
+		{"join",    "join the contents of the two files", cmd_join},
 		{"L",        "manage dynamically loaded plugins", cmd_plugins},
 		{"mount",    "mount filesystem", cmd_mount, cmd_mount_init},
 		{"open",     "open or map file", cmd_open, cmd_open_init},

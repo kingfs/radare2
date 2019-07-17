@@ -42,7 +42,7 @@ static char** env = NULL;
 #if HAVE_ENVIRON
 #include <execinfo.h>
 #endif
-// iOS dont have this we cant hardcode
+// iOS don't have this we can't hardcode
 // #include <crt_externs.h>
 extern char ***_NSGetEnviron(void);
 # ifndef PROC_PIDPATHINFO_MAXSIZE
@@ -124,7 +124,7 @@ R_API void r_sys_exit(int status, bool nocleanup) {
 	}
 }
 
-/* TODO: import stuff fron bininfo/p/bininfo_addr2line */
+/* TODO: import stuff from bininfo/p/bininfo_addr2line */
 /* TODO: check endianness issues here */
 R_API ut64 r_sys_now(void) {
 	ut64 ret;
@@ -161,6 +161,40 @@ R_API int r_sys_truncate(const char *file, int sz) {
 	}
 	return truncate (file, sz)? false: true;
 #endif
+}
+
+R_API os_info *r_sys_get_osinfo() {
+#if __WINDOWS__
+	return r_sys_get_winver();
+#endif
+	os_info *info = calloc (1, sizeof (os_info));
+	if (!info) {
+		return NULL;
+	}
+	int len = 0;
+	char *output = r_sys_cmd_str ("uname -s", NULL, &len);
+	if (len) {
+		strncpy (info->name, output, sizeof (info->name));
+		info->name[31] = '\0';
+	}
+	free (output);
+	output = r_sys_cmd_str ("uname -r", NULL, &len);
+	if (len) {
+		char *dot = strtok (output, ".");
+		if (dot) {
+			info->major = atoi (dot);
+		}
+		dot = strtok (NULL, ".");
+		if (dot) {
+			info->minor = atoi (dot);
+		}
+		dot = strtok (NULL, ".");
+		if (dot) {
+			info->patch = atoi (dot);
+		}
+	}
+	free (output);
+	return info;
 }
 
 R_API RList *r_sys_dir(const char *path) {
@@ -319,10 +353,10 @@ R_API int r_sys_clearenv(void) {
 }
 
 R_API int r_sys_setenv(const char *key, const char *value) {
-#if __UNIX__
 	if (!key) {
 		return 0;
 	}
+#if __UNIX__
 	if (!value) {
 		unsetenv (key);
 		return 0;
@@ -331,11 +365,13 @@ R_API int r_sys_setenv(const char *key, const char *value) {
 #elif __WINDOWS__
 	LPTSTR key_ = r_sys_conv_utf8_to_win (key);
 	LPTSTR value_ = r_sys_conv_utf8_to_win (value);
-
-	SetEnvironmentVariable (key_, value_);
+	int ret = SetEnvironmentVariable (key_, value_);
+	if (!ret) {
+		r_sys_perror ("r_sys_setenv/SetEnvironmentVariable");
+	}
 	free (key_);
 	free (value_);
-	return 0; // TODO. get ret
+	return ret ? 0 : -1;
 #else
 #warning r_sys_setenv : unimplemented for this platform
 	return 0;
@@ -1107,15 +1143,20 @@ R_API bool r_sys_tts(const char *txt, bool bg) {
 }
 
 R_API const char *r_sys_prefix(const char *pfx) {
-	static char prefix[1024] = {0};
-	if (!*prefix) {
-		r_str_ncpy (prefix, R2_PREFIX, sizeof (prefix));
+	static char *prefix = NULL;
+	if (!prefix) {
+#if __WINDOWS__ && !CUTTER
+		prefix = r_sys_get_src_dir_w32 ();
+		if (!prefix) {
+			prefix = strdup (R2_PREFIX);
+		}
+#else
+		prefix = strdup (R2_PREFIX);
+#endif
 	}
 	if (pfx) {
-		if (strlen (pfx) >= sizeof (prefix) - 1) {
-			return NULL;
-		}
-		r_str_ncpy (prefix, pfx, sizeof (prefix) - 1);
+		free (prefix);
+		prefix = strdup (pfx);
 	}
 	return prefix;
 }

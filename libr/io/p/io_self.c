@@ -410,7 +410,7 @@ RIOPlugin r_io_plugin_self = {
 	.write = __write,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_mach,
@@ -569,9 +569,9 @@ bool bsd_proc_vmmaps(RIO *io, int pid) {
 		return false;
 	}
 
+	size = size * 4 / 3;
 	ut8 *p = malloc (size);
 	if (p) {
-		size = size * 4 / 3;
 		s = sysctl (mib, 4, p, &size, NULL, 0);
 		if (s == -1) {
 			eprintf ("sysctl failed: %s\n", strerror (errno));
@@ -676,9 +676,9 @@ exit:
 		return false;
 	}
 
+	size = size * 4 / 3;
 	ut8 *p = malloc (size);
 	if (p) {
-		size = size * 4 / 3;
 		s = sysctl (mib, 5, p, &size, NULL, 0);
 		if (s == -1) {
 			eprintf ("sysctl failed: %s\n", strerror (errno));
@@ -791,7 +791,7 @@ RIOPlugin r_io_plugin_self = {
 	.desc = "read memory from myself using 'self://' (UNSUPPORTED)",
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_IO,
 	.data = &r_io_plugin_mach,

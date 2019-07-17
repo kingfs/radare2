@@ -65,7 +65,7 @@ R_API bool r_sandbox_check_path (const char *path) {
         if (path[0]=='.' && path[1]=='/') {
 		return false;
 	}
-	// Properly check for directrory traversal using "..". First, does it start with a .. part?
+	// Properly check for directory traversal using "..". First, does it start with a .. part?
 	if (path[0] == '.' && path[1] == '.' && (path[2] == '\0' || path[2] == '/')) {
 		return 0;
 	}
@@ -114,7 +114,7 @@ R_API bool r_sandbox_disable (bool e) {
 R_API bool r_sandbox_enable (bool e) {
 	if (enabled) {
 		if (!e) {
-			// eprintf ("Cant disable sandbox\n");
+			// eprintf ("Can't disable sandbox\n");
 		}
 		return true;
 	}
@@ -126,9 +126,40 @@ R_API bool r_sandbox_enable (bool e) {
 	}
 #endif
 #if HAVE_CAPSICUM
-	if (enabled && cap_enter () != 0) {
-		eprintf ("sandbox: call_enter failed\n");
-		return false;
+	if (enabled) {
+#if __FreeBSD_version >= 1000000
+		cap_rights_t wrt, rdr;
+
+		if (!cap_rights_init (&wrt, CAP_READ, CAP_WRITE)) {
+			eprintf ("sandbox: write descriptor failed\n");
+			return false;
+		}
+
+		if (!cap_rights_init (&rdr, CAP_READ, CAP_EVENT, CAP_FCNTL)) {
+			eprintf ("sandbox: read descriptor failed\n");
+			return false;
+		}
+
+		if (cap_rights_limit (STDIN_FILENO, &rdr) == -1) {
+			eprintf ("sandbox: stdin protection failed\n");
+			return false;
+		}
+
+		if (cap_rights_limit (STDOUT_FILENO, &wrt) == -1) {
+			eprintf ("sandbox: stdout protection failed\n");
+			return false;
+		}
+
+		if (cap_rights_limit (STDERR_FILENO, &wrt) == -1) {
+			eprintf ("sandbox: stderr protection failed\n");
+			return false;
+		}
+#endif
+
+		if (cap_enter () != 0) {
+			eprintf ("sandbox: call_enter failed\n");
+			return false;
+		}
 	}
 #endif
 	return enabled;

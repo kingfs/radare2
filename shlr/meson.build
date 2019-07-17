@@ -18,10 +18,10 @@ if not capstone_dep.found() or not get_option('use_sys_capstone')
     # NOTE: when you update CS_TIP or CS_BRA, also update them in shlr/Makefile
     use_capstone5 = get_option('use_capstone5')
     if use_capstone5
-      CS_TIP = '0574f899e5be711895378ea0848f38808f4a5431'
+      CS_TIP = 'cd59edaa420e8c5af1e946249da2177c1eaf4ff3'
       CS_BRA = 'next'
     else
-      CS_TIP = '120847ea9ec67003ef18a07ab47e8fa0e88d5773'
+      CS_TIP = 'fbceb8427198412aec1807f67c2d95396ebed3cc'
       CS_BRA = 'v4'
     endif
 
@@ -203,10 +203,24 @@ sdb_exe = executable('sdb', 'sdb/src/main.c',
   implicit_include_directories: false
 )
 
+sdb_gen_cmd_script = '''#script
+import os
+import sys
+sdb_exe = r'@0@'
+outfile = sys.argv[1]
+infiles = sys.argv[2:]
+if os.name == 'nt':
+    infiles = ','.join(infiles)
+    os.system('powershell -c "Get-Content {} | {} {} ="'.format(infiles, sdb_exe, outfile))
+else:
+    infiles = ' '.join(infiles)
+    os.system('cat {} | {} {} ='.format(infiles, sdb_exe, outfile))
+'''.format(sdb_exe.full_path())
+
 sdb_gen_cmd = [
   py3_exe,
   '-c',
-  'from sys import argv; __import__("os").system("@0@ %s = <%s" % (argv[1], argv[2]))'.format(sdb_exe.full_path()),
+  sdb_gen_cmd_script,
   '@OUTPUT@',
   '@INPUT@'
 ]

@@ -567,6 +567,9 @@ static void printFunctionType(RCore *core, const char *input) {
 	pj_a (pj);
 	for (i = 0; i < args; i++) {
 		char *type = sdb_get (TDB, sdb_fmt ("func.%s.arg.%d", name, i), 0);
+		if (!type) {
+			continue;
+		}
 		char *name = strchr (type, ',');
 		if (name) {
 			*name++ = 0;
@@ -626,7 +629,7 @@ static int print_link_readable_cb(void *p, const char *k, const char *v) {
 	RCore *core = (RCore *)p;
 	char *fmt = r_type_format (core->anal->sdb_types, v);
 	if (!fmt) {
-		eprintf ("Cant fint type %s", v);
+		eprintf ("Can't fint type %s", v);
 		return 1;
 	}
 	r_cons_printf ("(%s)\n", v);
@@ -651,7 +654,8 @@ static int print_typelist_json_cb(void *p, const char *k, const char *v) {
 	char *sizecmd = r_str_newf ("type.%s.size", k);
 	char *size_s = sdb_querys (sdb, NULL, -1, sizecmd);
 	char *formatcmd = r_str_newf ("type.%s", k);
-	char *format_s = r_str_trim (sdb_querys (sdb, NULL, -1, formatcmd));
+	char *format_s = sdb_querys (sdb, NULL, -1, formatcmd);
+	r_str_trim (format_s);
 	pj_ks (pj, "type", k);
 	pj_ki (pj, "size", size_s ? atoi (size_s) : -1);
 	pj_ks (pj, "format", format_s);
@@ -809,7 +813,7 @@ static void link_struct_offset(RCore *core, RAnalFunction *fcn) {
 	r_debug_reg_sync (core->dbg, R_REG_TYPE_ALL, true);
 	ut64 spval = r_reg_getv (esil->anal->reg, sp_name);
 	if (spval) {
-		// reset stack pointer to intial value
+		// reset stack pointer to initial value
 		RRegItem *sp = r_reg_get (esil->anal->reg, sp_name, -1);
 		ut64 curpc = r_reg_getv (esil->anal->reg, pc_name);
 		int stacksz = r_core_get_stacksz (core, fcn->addr, curpc);
@@ -818,7 +822,7 @@ static void link_struct_offset(RCore *core, RAnalFunction *fcn) {
 			r_reg_set_value (esil->anal->reg, sp, spval + stacksz);
 		}
 	} else {
-		// intialize stack
+		// initialize stack
 		r_core_cmd0 (core, "aeim");
 		stack_set = true;
 	}
@@ -1282,7 +1286,7 @@ static int cmd_type(void *data, const char *input) {
 					if (out) {
 						// remove previous types and save new edited types
 						sdb_reset (TDB);
-						r_parse_reset ();
+						r_parse_c_reset (core->parser);
 						r_anal_save_parsed_type (core->anal, out);
 						free (out);
 					}
@@ -1430,7 +1434,7 @@ static int cmd_type(void *data, const char *input) {
 			break;
 		}
 		case 'a': { // "taa"
-			char *off = r_str_trim (strdup (input + 2));
+			char *off = r_str_trim_dup (input + 2);
 			RAnalFunction *fcn;
 			RListIter *it;
 			if (off && *off) {
@@ -1579,7 +1583,7 @@ static int cmd_type(void *data, const char *input) {
 			break;
 		}
 		case 's': {
-			char *ptr = r_str_trim (strdup (input + 2));
+			char *ptr = r_str_trim_dup (input + 2);
 			ut64 addr = r_num_math (NULL, ptr);
 			const char *query = sdb_fmt ("link.%08" PFMT64x, addr);
 			const char *link = sdb_const_get (TDB, query, 0);
@@ -1618,14 +1622,15 @@ static int cmd_type(void *data, const char *input) {
 			r_core_cmd0 (core, "t?~tp\n");
 		} else { // "tp"
 			char *tmp = strdup (input);
-			char *ptr = r_str_trim (strchr (tmp, ' '));
+			char *ptr = strchr (tmp, ' ');
 			if (!ptr) {
 				break;
 			}
+			r_str_trim (ptr);
 			int nargs = r_str_word_set0 (ptr);
 			if (nargs > 0) {
 				const char *type = r_str_word_get0 (ptr, 0);
-				const char *arg = nargs > 1? r_str_word_get0 (ptr, 1): NULL;
+				const char *arg = (nargs > 1)? r_str_word_get0 (ptr, 1): NULL;
 				char *fmt = r_type_format (TDB, type);
 				if (!fmt) {
 					eprintf ("Cannot find '%s' type\n", type);
@@ -1657,7 +1662,7 @@ static int cmd_type(void *data, const char *input) {
 			r_core_cmd_help (core, help_msg_t_minus);
 		} else if (input[1] == '*') {
 			sdb_reset (TDB);
-			r_parse_reset ();
+			r_parse_c_reset (core->parser);
 		} else {
 			const char *name = input + 1;
 			while (IS_WHITESPACE (*name)) name++;

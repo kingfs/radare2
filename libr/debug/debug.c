@@ -912,6 +912,17 @@ R_API int r_debug_step(RDebug *dbg, int steps) {
 	return steps_taken;
 }
 
+static bool isStepOverable(ut64 opType) {
+	switch (opType & R_ANAL_OP_TYPE_MASK) {
+	case R_ANAL_OP_TYPE_SWI:
+	case R_ANAL_OP_TYPE_CALL:
+	case R_ANAL_OP_TYPE_UCALL:
+	case R_ANAL_OP_TYPE_RCALL:
+		return true;
+	}
+	return false;
+}
+
 R_API int r_debug_step_over(RDebug *dbg, int steps) {
 	RAnalOp op;
 	ut64 buf_pc, pc, ins_size;
@@ -962,8 +973,7 @@ R_API int r_debug_step_over(RDebug *dbg, int steps) {
 			ins_size = op.fail;
 		}
 		// Skip over all the subroutine calls
-		if ((op.type & R_ANAL_OP_TYPE_MASK) == R_ANAL_OP_TYPE_CALL ||
-			(op.type & R_ANAL_OP_TYPE_MASK) == R_ANAL_OP_TYPE_UCALL) {
+		if (isStepOverable (op.type)) {
 			if (!r_debug_continue_until (dbg, ins_size)) {
 				eprintf ("Could not step over call @ 0x%"PFMT64x"\n", pc);
 				return steps_taken;
@@ -1269,7 +1279,7 @@ R_API int r_debug_continue_until_optype(RDebug *dbg, int type, int over) {
 	buf_pc = r_debug_reg_get (dbg, dbg->reg->name[R_REG_NAME_PC]);
 	dbg->iob.read_at (dbg->iob.io, buf_pc, buf, sizeof (buf));
 
-	// step first, we dont want to check current optype
+	// step first, we don't want to check current optype
 	for (;;) {
 		if (!r_debug_reg_sync (dbg, R_REG_TYPE_GPR, false)) {
 			break;
@@ -1663,7 +1673,7 @@ R_API ut64 r_debug_get_baddr(RDebug *dbg, const char *file) {
 		free (abspath);
 	}
 	// fallback resolution (osx/w32?)
-	// we asume maps to be loaded in order, so lower addresses come first
+	// we assume maps to be loaded in order, so lower addresses come first
 	r_list_foreach (dbg->maps, iter, map) {
 		if (map->perm == 5) { // r-x
 			return map->addr;

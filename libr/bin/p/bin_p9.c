@@ -175,6 +175,9 @@ static RBinInfo *info(RBinFile *bf) {
 
 static ut64 size(RBinFile *bf) {
 	ut64 text, data, syms, spsz;
+	if (!bf) {
+		return 0;
+	}
 	if (!bf->o->info) {
 		bf->o->info = info (bf);
 	}
@@ -233,7 +236,7 @@ RBinPlugin r_bin_plugin_p9 = {
 	.create = &create,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_BIN,
 	.data = &r_bin_plugin_p9,

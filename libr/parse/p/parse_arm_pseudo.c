@@ -44,9 +44,9 @@ static int replace(int argc, const char *argv[], char *newstr) {
 		{ 0, "b.le", "jmp ifle #", { 1 } },
 		{ 0, "beq lr", "ifeq ret", { 0 } },
 		{ 0, "beq", "je #", { 1 } },
-		{ 0, "call", "#()", { 1 } },
-		{ 0, "bl", "#()", { 1 } },
-		{ 0, "blx", "#()", { 1 } },
+		{ 0, "call", "# ()", { 1 } },
+		{ 0, "bl", "# ()", { 1 } },
+		{ 0, "blx", "# ()", { 1 } },
 		{ 0, "bx lr", "ret", { 0 } },
 		{ 0, "bxeq", "je #", { 1 } },
 		{ 0, "cmf", "if (# == #)", { 1, 2 } },
@@ -438,7 +438,7 @@ RParsePlugin r_parse_plugin_arm_pseudo = {
 	.varsub = &varsub,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_PARSE,
 	.data = &r_parse_plugin_arm_pseudo,

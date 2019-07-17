@@ -47,16 +47,11 @@ static const char *getCondz(ut8 cond) {
 static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int len, RAnalOpMask mask) {
 	int sz = dalvik_opcodes[data[0]].len;
 	if (!op || sz >= len) {
+		if (op && (mask & R_ANAL_OP_MASK_DISASM)) {
+			op->mnemonic = strdup ("invalid");
+		}
 		return -1;
 	}
-#if 0
-	memset (op, '\0', sizeof (RAnalOp));
-	op->type = R_ANAL_OP_TYPE_UNK;
-	op->ptr = UT64_MAX;
-	op->val = UT64_MAX;
-	op->jump = UT64_MAX;
-	op->fail = UT64_MAX;
-#endif
 	op->size = sz;
 	op->nopcode = 1; // Necessary??
 	op->id = data[0];
@@ -72,7 +67,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 	switch (data[0]) {
 	case 0xca: // rem-float:
 		op->family = R_ANAL_OP_FAMILY_FPU;
-		/* pass thru */
+		/* pass through */
 	case 0x1b: // const-string/jumbo
 	case 0x14: // const
 	case 0x15: // const
@@ -176,7 +171,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 	case 0x88: // float-to-long
 	case 0x86: // long-to-double
 		op->family = R_ANAL_OP_FAMILY_FPU;
-		/* pass thru */
+		/* pass through */
 	case 0x81: // int-to-long
 	case 0x82: // int-to-float
 	case 0x85: // long-to-float
@@ -362,7 +357,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 	case 0xcf: // rem-double
 	case 0xaf: // rem-double
 		op->family = R_ANAL_OP_FAMILY_FPU;
-		/* pass thru */
+		/* pass through */
 	case 0xb4: // rem-int/2addr
 	case 0xdc: // rem-int/lit8
 	case 0xd4: // rem-int
@@ -388,7 +383,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 		break;
 	case 0xc9: // div-float
 		op->family = R_ANAL_OP_FAMILY_FPU;
-		/* pass thru */
+		/* pass through */
 	case 0x93: // div-int
 	case 0xd3: // div-int/lit16
 	case 0xdb: // div-int/lit8
@@ -576,6 +571,10 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 			// TODO: handle /range instructions
 			// NOP esilprintf (op, "8,sp,-=,0x%"PFMT64x",sp,=[8],0x%"PFMT64x",ip,=", addr);
 		}
+		if (mask & R_ANAL_OP_MASK_ESIL) {
+			// TODO: handle /range instructions
+			esilprintf (op, "8,sp,-=,0x%"PFMT64x",sp,=[8],0x%"PFMT64x",ip,=", op->fail, op->jump);
+		}
 		break;
 	case 0x27: // throw
 		{
@@ -655,7 +654,7 @@ static int dalvik_op(RAnal *anal, RAnalOp *op, ut64 addr, const ut8 *data, int l
 	case 0xa7: // sub-float
 	case 0xcc: // sub-double
 		op->family = R_ANAL_OP_FAMILY_FPU;
-		/* fall thru */
+		/* fall through */
 	case 0xc7:
 	case 0xbc:
 	case 0x91:
@@ -729,9 +728,28 @@ static int set_reg_profile(RAnal *anal) {
 	"gpr	v13	.32	52	0\n"
 	"gpr	v14	.32	56	0\n"
 	"gpr	v15	.32	60	0\n"
-	"gpr	ip	.32	64	0\n"
-	"gpr	sp	.32	68	0\n"
-	"gpr	bp	.32	72	0\n"
+	"gpr	v16	.32	40	0\n"
+	"gpr	v17	.32	44	0\n"
+	"gpr	v18	.32	48	0\n"
+	"gpr	v19	.32	52	0\n"
+	"gpr	v20	.32	56	0\n"
+	"gpr	v21	.32	60	0\n"
+	"gpr	v22	.32	64	0\n"
+	"gpr	v23	.32	68	0\n"
+	"gpr	v24	.32	72	0\n"
+	"gpr	v25	.32	76	0\n"
+	"gpr	v26	.32	80	0\n"
+	"gpr	v27	.32	84	0\n"
+	"gpr	v28	.32	88	0\n"
+	"gpr	v29	.32	92	0\n"
+	"gpr	v30	.32	96	0\n"
+	"gpr	v31	.32	100	0\n"
+	"gpr	v32	.32	104	0\n"
+	"gpr	v33	.32	108	0\n"
+	"gpr	v34	.32	112	0\n"
+	"gpr	ip	.32	116	0\n"
+	"gpr	sp	.32	120	0\n"
+	"gpr	bp	.32	124	0\n"
 	;
 	return r_reg_set_profile_string (anal->reg, p);
 }
@@ -746,7 +764,7 @@ RAnalPlugin r_anal_plugin_dalvik = {
 	.op = &dalvik_op,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_dalvik,

@@ -52,6 +52,7 @@ R_API int r_core_setup_debugger (RCore *r, const char *debugbackend, bool attach
 		}
 	}
 	r_config_set (r->config, "cmd.vprompt", ".dr*");
+	r_config_set (r->config, "cmd.gprompt", ".dr*");
 	return true;
 }
 
@@ -293,9 +294,8 @@ R_API bool r_core_seek(RCore *core, ut64 addr, bool rb) {
 		RBinFile *bf = r_bin_file_at (core->bin, core->offset);
 		if (bf) {
 			core->bin->cur = bf;
-			ut32 bfid = bf->id;
-			ut32 boid = bf->o->id;
-			r_bin_select_by_ids (core->bin, bfid, boid);
+			r_bin_select_bfid (core->bin, bf->id);
+			// XXX r_core_cmdf (core, "obb %d", bf->id);
 		} else {
 			core->bin->cur = NULL;
 		}
@@ -305,7 +305,6 @@ R_API bool r_core_seek(RCore *core, ut64 addr, bool rb) {
 
 R_API int r_core_seek_delta(RCore *core, st64 addr) {
 	ut64 tmp = core->offset;
-	int ret;
 	if (addr == 0) {
 		return true;
 	}
@@ -321,12 +320,7 @@ R_API int r_core_seek_delta(RCore *core, st64 addr) {
 		}
 	}
 	core->offset = addr;
-	ret = r_core_seek (core, addr, 1);
-	//ret = r_core_block_read (core);
-	//if (ret == -1)
-	//	memset (core->block, 0xff, core->blocksize);
-	//	core->offset = tmp;
-	return ret;
+	return r_core_seek (core, addr, 1);
 }
 
 // TODO: kill this wrapper

@@ -886,7 +886,7 @@ static void anop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 		esilprintf (op, "eax,rax,=,31,rax,>>,?{,0xffffffff00000000,rax,|=,}");
 		break;
 	case X86_INS_AAA:
-		esilprintf (op, "0,cf,:=,0,af,:=,9,al,>,?{,10,al,-=,1,ah,+=,1,cf,:=,1,af,:=,}");	//dont
+		esilprintf (op, "0,cf,:=,0,af,:=,9,al,>,?{,10,al,-=,1,ah,+=,1,cf,:=,1,af,:=,}");	//don't
 		break;
 	case X86_INS_AAD:
 		arg0 = "0,zf,:=,0,sf,:=,0,pf,:=,10,ah,*,al,+,ax,=";
@@ -1328,7 +1328,7 @@ static void anop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 
 			/*
 			 * Similar to BSF, except we naturally don't
-			 * need to substract anything to create
+			 * need to subtract anything to create
 			 * a mask and return the result.
 			 */
 			esilprintf (op, "%s,!,?{,1,zf,=,BREAK,},0,zf,=,"
@@ -2922,7 +2922,16 @@ static int analop(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len, RAn
 #endif
 	if (n < 1) {
 		op->type = R_ANAL_OP_TYPE_ILL;
+		if (mask & R_ANAL_OP_MASK_DISASM) {
+			op->mnemonic = strdup ("invalid");
+		}
 	} else {
+		if (mask & R_ANAL_OP_MASK_DISASM) {
+			op->mnemonic = r_str_newf ("%s%s%s",
+				insn->mnemonic,
+				insn->op_str[0]?" ":"",
+				insn->op_str);
+		}
 		// int rs = a->bits / 8;
 		//const char *pc = (a->bits==16)?"ip": (a->bits==32)?"eip":"rip";
 		//const char *sp = (a->bits==16)?"sp": (a->bits==32)?"esp":"rsp";
@@ -3456,7 +3465,7 @@ RAnalPlugin r_anal_plugin_x86_cs = {
 //	.esil_intr = esil_x86_cs_intr,
 };
 
-#ifndef CORELIB
+#ifndef R2_PLUGIN_INCORE
 R_API RLibStruct radare_plugin = {
 	.type = R_LIB_TYPE_ANAL,
 	.data = &r_anal_plugin_x86_cs,

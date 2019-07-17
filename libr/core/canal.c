@@ -89,14 +89,7 @@ static int is_string(const ut8 *buf, int size, int *len) {
 static char *is_string_at(RCore *core, ut64 addr, int *olen) {
 	ut8 rstr[128] = {0};
 	int ret = 0, len = 0;
-	ut8 *str;
-	//there can be strings in code section
-#if 0
-	if (iscodesection (core, addr)) {
-		return NULL;
-	}
-#endif
-	str = calloc (256, 1);
+	ut8 *str = calloc (256, 1);
 	if (!str) {
 		if (olen) {
 			*olen = 0;
@@ -945,8 +938,8 @@ R_API RAnalOp* r_core_anal_op(RCore *core, ut64 addr, int mask) {
 	if (r_anal_op (core->anal, op, addr, ptr, len, mask) < 1) {
 		goto err_op;
 	}
-	if (mask & R_ANAL_OP_MASK_DISASM) {
-		// i dont think this is used anywhere
+	if (!op->mnemonic && mask & R_ANAL_OP_MASK_DISASM) {
+		// i don't think this is used anywhere
 		// decode instruction here
 		r_asm_set_pc (core->assembler, addr);
 		r_asm_op_init (&asmop);
@@ -977,6 +970,9 @@ static void print_hint_h_format(RAnalHint* hint) {
 	HINTCMD (hint, immbase, " immbase=%d");
 	HINTCMD (hint, esil, " esil='%s'");
 	HINTCMD (hint, ptr, " ptr=0x%"PFMT64x);
+	if (hint->val != UT64_MAX) {
+		r_cons_printf (" val=0x%08"PFMT64x, hint->val);
+	}
 	if (hint->jump != UT64_MAX) {
 		r_cons_printf (" jump=0x%08"PFMT64x, hint->jump);
 	}
@@ -1583,7 +1579,7 @@ R_API int r_core_anal_bb(RCore *core, RAnalFunction *fcn, ut64 addr, int head) {
 	}
 
 	if (ret == R_ANAL_RET_NEW) { /* New bb */
-		// XXX: use read_ahead and so on, but dont allocate that much in here
+		// XXX: use read_ahead and so on, but don't allocate that much in here
 		const int buflen = core->anal->opt.bb_max_size; // OMG THIS IS SO WRONG
 		buf = calloc (1, buflen);
 		if (!buf) {
@@ -2478,7 +2474,7 @@ static int fcn_list_verbose(RCore *core, RList *fcns) {
 	return 0;
 }
 
-static int fcn_print_default(RCore *core, RAnalFunction *fcn, bool quiet) {
+static void __fcn_print_default(RCore *core, RAnalFunction *fcn, bool quiet) {
 	if (quiet) {
 		r_cons_printf ("0x%08"PFMT64x" ", fcn->addr);
 	} else {
@@ -2495,14 +2491,13 @@ static int fcn_print_default(RCore *core, RAnalFunction *fcn, bool quiet) {
 		free (name);
 		free (msg);
 	}
-	return 0;
 }
 
 static int fcn_list_default(RCore *core, RList *fcns, bool quiet) {
 	RListIter *iter;
 	RAnalFunction *fcn;
 	r_list_foreach (fcns, iter, fcn) {
-		fcn_print_default (core, fcn, quiet);
+		__fcn_print_default (core, fcn, quiet);
 		if (quiet) {
 			r_cons_newline ();
 		}
@@ -2632,7 +2627,7 @@ static int fcn_print_json(RCore *core, RAnalFunction *fcn, PJ *pj) {
 	{
 		char *sig = r_core_cmd_strf (core, "afcf @ 0x%"PFMT64x, fcn->addr);
 		if (sig) {
-			sig = r_str_trim (sig);
+			r_str_trim (sig);
 			pj_ks (pj, "signature", sig);
 			free (sig);
 		}
@@ -2774,6 +2769,9 @@ static int fcn_print_detail(RCore *core, RAnalFunction *fcn) {
 	r_cons_printf ("afc %s @ 0x%08"PFMT64x"\n", fcn->cc?fcn->cc: defaultCC, fcn->addr);
 	if (fcn->folded) {
 		r_cons_printf ("afF @ 0x%08"PFMT64x"\n", fcn->addr);
+	}
+	if (fcn->bits != 0) {
+		r_cons_printf ("afB %d @ 0x%08"PFMT64x"\n", fcn->bits, fcn->addr);
 	}
 	fcn_list_bbs (fcn);
 	/* show variables  and arguments */
@@ -2956,6 +2954,11 @@ R_API int r_core_anal_fcn_list(RCore *core, const char *input, const char *rad) 
 	if (r_list_empty (core->anal->fcns)) {
 		return 0;
 	}
+	if (*rad == '.') {
+		RAnalFunction *fcn = r_anal_get_fcn_at (core->anal, core->offset, 0);
+		__fcn_print_default (core, fcn, false);
+		return 0;
+	}
 
 	if (rad && (*rad == 'l' || *rad == 'j')) {
 		fcnlist_gather_metadata (core->anal, core->anal->fcns);
@@ -2992,21 +2995,17 @@ R_API int r_core_anal_fcn_list(RCore *core, const char *input, const char *rad) 
 		break;
 	case '=': { // afl=
 		r_list_sort (fcns, cmpaddr);
-		RList *flist = r_list_new ();
+		RList *flist = r_list_newf ((RListFree) r_listinfo_free);
 		if (!flist) {
 			return -1;
 		}
 		ls_foreach (fcns, iter, fcn) {
 			char temp[4];
-			ListInfo *info = R_NEW (ListInfo);
+			RInterval inter = (RInterval) {fcn->addr, r_anal_fcn_size (fcn)};
+			RListInfo *info = r_listinfo_new (r_core_anal_fcn_name (core, fcn), inter, inter, -1, sdb_itoa (fcn->bits, temp, 10));
 			if (!info) {
-				return -1;
+				break;
 			}
-			info->name = r_core_anal_fcn_name (core, fcn);
-			info->pitv = (RInterval) {fcn->addr, r_anal_fcn_size (fcn)};
-			info->vitv = info->pitv;
-			info->extra = sdb_itoa (fcn->bits, temp, 10); 
-			info->perm  = -1;
 			r_list_append (flist, info);
 		}
 		r_core_visual_list (core, flist, core->offset, core->blocksize,
@@ -3441,7 +3440,7 @@ R_API int r_core_anal_search(RCore *core, ut64 from, ut64 to, ut64 ref, int mode
 			if (r_cons_is_breaked ()) {
 				break;
 			}
-			// TODO: this can be probably enhaced
+			// TODO: this can be probably enhanced
 			if (!r_io_read_at (core->io, at, buf, core->blocksize)) {
 				eprintf ("Failed to read at 0x%08" PFMT64x "\n", at);
 				break;
@@ -4509,6 +4508,7 @@ static inline bool canal_isThumb(RCore *core) {
 R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 	bool cfg_anal_strings = r_config_get_i (core->config, "anal.strings");
 	bool emu_lazy = r_config_get_i (core->config, "emu.lazy");
+	bool gp_fixed = r_config_get_i (core->config, "anal.gpfixed");
 	RAnalEsil *ESIL = core->anal->esil;
 	ut64 refptr = 0LL;
 	const char *pcname;
@@ -4609,6 +4609,12 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 		}
 	}
 
+	ut64 gp = r_config_get_i (core->config, "anal.gp");
+	const char *gp_reg = NULL;
+	if (!strcmp (core->anal->cur->arch, "mips")) {
+		gp_reg = "gp";
+	}
+
 	int opalign = r_anal_archinfo (core->anal, R_ANAL_ARCHINFO_ALIGN);
 	const char *sn = r_reg_get_name (core->anal->reg, R_REG_NAME_SN);
 	if (!sn) {
@@ -4685,7 +4691,7 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 			//	eprintf ("0x%08"PFMT64x" SYSCALL %-4d %s\n", cur, snv, si->name);
 				r_flag_set_next (core->flags, sdb_fmt ("syscall.%s", si->name), cur, 1);
 			} else {
-				//todo were doing less filtering up top because we cant match against 80 on all platforms
+				//todo were doing less filtering up top because we can't match against 80 on all platforms
 				// might get too many of this path now..
 			//	eprintf ("0x%08"PFMT64x" SYSCALL %d\n", cur, snv);
 				r_flag_set_next (core->flags, sdb_fmt ("syscall.%d", snv), cur, 1);
@@ -4700,6 +4706,9 @@ R_API void r_core_anal_esil(RCore *core, const char *str, const char *target) {
 			}
 			r_anal_esil_set_pc (ESIL, cur);
 			r_reg_setv (core->anal->reg, pcname, cur + op.size);
+			if (gp_fixed && gp_reg) {
+				r_reg_setv (core->anal->reg, gp_reg, gp);
+			}
 			(void)r_anal_esil_parse (ESIL, esilstr);
 			// looks like ^C is handled by esil_parse !!!!
 			//r_anal_esil_dumpstack (ESIL);

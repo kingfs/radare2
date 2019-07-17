@@ -57,6 +57,7 @@ static const char *help_msg_exclamation[] = {
 	"Usage:", "!<cmd>", "  Run given command as in system(3)",
 	"!", "", "list all historic commands",
 	"!", "ls", "execute 'ls' in shell",
+	"!*", "r2p x", "run r2 command via r2pipe in current session",
 	"!!", "", "save command history to hist file",
 	"!!", "ls~txt", "print output of 'ls' and grep for 'txt'",
 	"!!!", "cmd [args|$type]", "adds the autocomplete value",
@@ -756,9 +757,14 @@ static int cmd_help(void *data, const char *input) {
 				"$FI", "$c", "$r", "$D", "$DD", "$e", "$f", "$j", "$Ja", "$l", "$m", "$M", "$MM", "$o",
 				"$p", "$P", "$s", "$S", "$SS", "$v", "$w", NULL
 			};
+			const bool wideOffsets = r_config_get_i (core->config, "scr.wideoff");
 			while (vars[i]) {
 				const char *pad = r_str_pad (' ', 6 - strlen (vars[i]));
-				eprintf ("%s %s 0x%08"PFMT64x"\n", vars[i], pad, r_num_math (core->num, vars[i]));
+				if (wideOffsets) {
+					eprintf ("%s %s 0x%016"PFMT64x"\n", vars[i], pad, r_num_math (core->num, vars[i]));
+				} else {
+					eprintf ("%s %s 0x%08"PFMT64x"\n", vars[i], pad, r_num_math (core->num, vars[i]));
+				}
 				i++;
 			}
 		}
@@ -847,6 +853,12 @@ static int cmd_help(void *data, const char *input) {
 		break;
 	case 'e': // "?e" echo
 		switch (input[1]) {
+		case '=': { // "?e="
+			ut64 pc = r_num_math (core->num, input + 2);
+			r_print_progressbar (core->print, pc, 80);
+			r_cons_newline ();
+			break;
+		}
 		case 'b': { // "?eb"
 			char *arg = strdup (r_str_trim_ro (input + 2));
 			int n = r_str_split (arg, ' ');
@@ -860,7 +872,7 @@ static int cmd_help(void *data, const char *input) {
 		}
 		case 's': { // "?es"
 			char *msg = strdup (input + 2);
-			msg = r_str_trim (msg);
+			r_str_trim (msg);
 			char *p = strchr (msg, '&');
 			if (p) *p = 0;
 			r_sys_tts (msg, p != NULL);
@@ -886,6 +898,41 @@ static int cmd_help(void *data, const char *input) {
 			free (newmsg);
 			break;
 		}
+		case 'd': // "?ed"
+			  if (input[2] == 'd') {
+				  int i,j;
+				  r_cons_show_cursor (0);
+				  r_cons_clear00 ();
+				  for (i = 1; i < 100; i++) {
+					  if (r_cons_is_breaked ()) {
+						  break;
+					  }
+					  for (j = 0; j < 20; j++) {
+						  char *d = r_str_donut (i);
+						  r_cons_gotoxy (0,0);
+						  r_str_trim_tail (d);
+						  r_cons_clear_line (0);
+						  r_cons_printf ("Downloading the Gibson...\n\n");
+						  r_core_cmdf (core, "?e=%d", i);
+						  r_cons_strcat (d);
+						  r_cons_clear_line (0);
+						  r_cons_newline ();
+						  free (d);
+						  r_cons_flush ();
+						  r_sys_usleep (2000);
+					  }
+				  }
+				  r_cons_clear00();
+				  r_cons_printf ("\nPayload installed. Thanks for your patience.\n\n");
+			} else {
+				  char *d = r_str_donut (r_num_math (core->num, input + 2));
+				  r_str_trim_tail (d);
+				  const char *color = (core->cons && core->cons->context->pal.flag)? core->cons->context->pal.flag: "";
+				  r_cons_printf ("%s%s", color, d);
+				  r_cons_newline ();
+				  free (d);
+			}
+			break;
 		case 'p':
 			  {
 			char *word, *str = strdup (input + 2);
@@ -916,6 +963,8 @@ static int cmd_help(void *data, const char *input) {
 		default:
 			eprintf ("Usage: ?e[...]\n");
 			eprintf (" e msg       echo message\n");
+			eprintf (" e= N...     progressbar N percent\n");
+			eprintf (" ed N...     display a donut\n");
 			eprintf (" ep N...     echo pie chart\n");
 			eprintf (" eb N...     echo portions bar\n");
 			eprintf (" en msg      echo without newline\n");
